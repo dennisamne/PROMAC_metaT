@@ -1,0 +1,834 @@
+---
+title: "PROMAC_metaT"
+author: "Dennis Amnebrink"
+date: "7/20/2021"
+output: html_document
+---
+# A highher abundance of proteorhodopsin-genes in the N-treatment? Based on 16S data....
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries}
+#Loading libraries
+library(tidyverse)
+library(vegan)
+library(pheatmap)
+library(data.table)
+```
+
+# Questions
+Some genes are annotated as eukaryotic, among other response to herbicide is in the best_og_desc.
+
+322,958 entries out of 875,160 in the "eggNOG OGs" are denoted as eukaryotic, why is that? Shall these be filtered away, and how many percent of reads do they constitute?
+
+They constitute the majority of reads if following the taxonomy...
+```{r R_colours}
+GEOM_COL_COLOURS = c(
+  RColorBrewer::brewer.pal(12, name = 'Paired'))
+```
+
+```{r files}
+#File to connect NGI ID with our own classification ID, add the µ-values to this file for testing later, or do that in a sep file?
+sample_ID <- read_tsv("../data/J.Pinhassi_21_02_sample_info.txt") %>%
+  dplyr::select(1:2) %>%
+  dplyr::rename(sample = 1, sample_name = 2) %>%
+  mutate(sample_name = str_replace(sample_name, "[0-9]*:","")) %>%
+  separate(sample_name, c("treatment","timepoint"), sep = ",") %>%
+  mutate(treatment = gsub("NT","TN", treatment)) %>%
+  mutate(sample_name = paste(timepoint, treatment, sep = "_")) %>%
+  separate(treatment, c("treatment","replicate"), sep = -1) %>%
+  mutate(tre_rep = gsub("_","", sample_name)) %>%
+  mutate(tre_rep = toupper(tre_rep)) 
+
+#Reading in annotations
+eggnogs <- read_tsv("../data/eggnog_annotations.tsv.gz")
+
+#Reading in taxonomic annotation of reads
+taxonomy <- read_tsv("../data/eukulele_phylodb.tsv") %>%
+  select(-species) %>%
+  rename(species = "genus", genus = "family", family = "order", order = "class", class = "phylum", phylum = "kingdom")
+  
+#Count file for all orfs, tpm is calculated per sample
+bbmap <- fread("../data/bbmap_counts.tsv.gz", sep = "\t") %>%
+              filter(count > 0)  %>%                               # removing 0 counts to reduce size of table
+              mutate(Geneid = str_replace(Geneid, "[0-9]*_",""),   # Joining in chr and geneid to match format of eggnog naming.
+                     orf = paste(Chr,Geneid, sep = "_"),
+                     sample = str_extract(sample, "P[0-9]*_[0-9]*")) %>% # Removing extra numbers in sample to match sample_ID format
+              dplyr::select(-Geneid,-Chr) %>%
+              dplyr::select(orf,Start,End,Strand,Length,sample,count,tpm) 
+
+#Overarching stats for all sample files
+overall_stats <- read_tsv("../data/overall_stats.tsv") %>%
+  dplyr::select(-2,-3)                                                   # Removing empty columns
+
+target_genes <- read_tsv("../data/list_of_genes.tsv")
+
+mu_values <- read_tsv("../data/mu.tsv")
+
+#Add maintenance respiration values
+Rm <- read_tsv("../data/Rm_values.tsv") %>%
+   mutate(tre_rep = paste(timepoint, treatment, replicate, sep = "")) 
+
+```
+
+```{r read_overview}
+#Add one with taxonomic annotation too, and one with original reads
+  overall_stats %>% 
+    gather(key = "process", value = "value", c(2:4)) %>%
+    mutate(process = as_factor(process)) %>%
+    ggplot(mapping = aes(x = process, y = value, group = process, fill = process)) +
+    geom_boxplot() +
+    ggtitle("Boxplot distribution of reads throughout pipeline")
+```
+## Plotting the number of reads to each domain to characterize community
+```{r ASV-domain-fidelity}
+taxonomy %>%
+  group_by(domain) %>%
+  tally() %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = domain, y = n, group = domain, fill = domain)) +
+  geom_col()
+```
+
+```{r ASV-domain-abundance}
+bbmap %>%
+  inner_join(taxonomy, by = "orf") %>%
+  group_by(domain) %>%
+  summarise(count = sum(count)) %>%
+  ungroup() %>%
+  mutate(percent = count/sum(count)) %>%
+  ggplot(mapping = aes(x = domain, y = percent, group = domain, fill = domain)) +
+  geom_col() +
+  theme(axis.text.x = element_text(face = c("plain","bold","plain","plain","plain")))
+```
+
+# Removing non-prokaryotic reads
+```{r}
+#Removing non-prokreads as well as recalculating tpm over prok frac.
+bbmap_p <- bbmap %>% 
+  semi_join(taxonomy %>% filter(domain %in% c("Bacteria", "Archaea")), 
+            by = "orf") %>%
+  dplyr::select(-tpm) %>%
+   group_by(sample) %>%
+            mutate(t = count/Length) %>%
+            mutate(tpm = t/sum(t)*1e6) %>%
+            ungroup()
+```
+
+```{r cog-cat-overview, eval=FALSE}
+#COG-categories shoed no pattern, they are very large as well, the next chunk shows clear patterns (higher resolution)
+orf_mat <- bbmap_p %>%
+  inner_join(eggnogs, by = "orf") %>% #6674350 rows
+  inner_join(sample_ID, by = "sample") %>%
+  select(best_og_cat, tpm, sample_name) %>%
+  separate_rows(best_og_cat, sep = '(?<=.)(?=.)') %>% # Not sure how this separator works, but it works
+  group_by(sample_name, best_og_cat) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  spread(best_og_cat, tpm, fill = 0) %>%
+  column_to_rownames("sample_name") %>%
+  as.matrix() 
+
+  orf_mat_hellinger <- decostand(orf_mat[,-1], method = "hellinger") # Removing the unannotated functional category and doing helllinger
+  
+  nmds <- metaMDS(orf_mat[,-1], distance = "bray", k = 2) 
+  nmds <- metaMDS(orf_mat_hellinger, distance = "bray", k = 2) 
+  
+  
+  as.data.frame(nmds$points) %>%
+    rownames_to_column("sample_name") %>%
+    inner_join(sample_ID, by = "sample_name") %>%
+    #separate(treatment, c("treatment", "replicate"), sep = -1) %>%
+    ggplot(mapping = aes(x = MDS1, y = MDS2, fill = treatment, colour = treatment, shape = timepoint)) +
+    geom_point() +
+    scale_colour_manual(values = GEOM_COL_COLOURS) +
+    ggtitle("nMDS based on COG-categories") +
+    ylab("NMDS2") +
+    xlab(paste0("NMDS1\n", "stress=", round(nmds$stress, 3))) 
+    ggsave("../results/NMDS_COG_CATS.png")
+    
+  PCA <- rda(orf_mat[,-1], distance = "bray") 
+  PCA <- rda(orf_mat_hellinger, distance = "bray") 
+  
+   eigenvalues <- as.data.frame(PCA$CA$eig) %>%
+    rownames_to_column("PC_axes") %>%
+    rename(eigenvalues = "PCA$CA$eig") %>%
+    mutate(eigenvalues_variation_explained = (eigenvalues/sum(eigenvalues) * 100))
+   
+   as.data.frame(PCA$CA$u) %>%
+     rownames_to_column("sample_name") %>%
+     inner_join(sample_ID, by = "sample_name") %>%
+     #separate(treatment, c("treatment", "replicate"), sep = -1) %>%
+     ggplot(mapping = aes(x = PC1, y = PC2, fill = treatment, colour = treatment, shape = timepoint)) +
+     geom_point(aes(size = 10)) +
+     scale_colour_manual(values = GEOM_COL_COLOURS) +
+     xlab(paste("PC1", round(eigenvalues$eigenvalues_variation_explained[1], digits = 2),"%", sep = " ")) +
+     ylab(paste("PC2", round(eigenvalues$eigenvalues_variation_explained[2], digits = 2),"%", sep = " ")) 
+     ggtitle("PCA based on COG-categories") +
+     ggsave("../results/PCA_COG_CATS.png")
+```
+
+
+```{r eggNOG-overview}
+   # Doing nmds and PCA on eggnogs instead, Looks a lot better
+orf_mat <-  bbmap_p %>%
+  inner_join(eggnogs, by = "orf") %>% #6674350 rows
+  inner_join(sample_ID, by = "sample") %>%
+  rename(eggNOG_OGs = "eggNOG OGs") %>%
+  select(eggNOG_OGs, tpm, sample_name) %>%
+  separate_rows(eggNOG_OGs, sep = ',') %>% 
+  group_by(sample_name, eggNOG_OGs) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  spread(eggNOG_OGs, tpm, fill = 0) %>%
+  column_to_rownames("sample_name") %>%
+  as.matrix() 
+   
+   orf_mat_hellinger <- decostand(orf_mat[,-1], method = "hellinger") # Removing the unannotated functional category and doing helllinger¨
+     
+    nmds <- metaMDS(orf_mat[,-1], distance = "bray", k = 2) 
+   
+  
+  as.data.frame(nmds$points) %>%
+    rownames_to_column("sample_name") %>%
+    inner_join(sample_ID, by = "sample_name") %>%
+    #separate(treatment, c("treatment", "replicate"), sep = -1) %>%
+    ggplot(mapping = aes(x = MDS1, y = MDS2, fill = treatment, colour = treatment, shape = timepoint)) +
+    geom_point() +
+    scale_colour_manual(values = GEOM_COL_COLOURS) +
+    ggtitle("nMDS based on eggNOGS") +
+    ylab("NMDS2") +
+    xlab(paste0("NMDS1\n", "stress=", round(nmds$stress, 3))) 
+    ggsave("../results/NMDS_eggNOG.png")
+    
+    
+  nmds <- metaMDS(orf_mat_hellinger, distance = "bray", k = 2) 
+     
+  as.data.frame(nmds$points) %>%
+    rownames_to_column("sample_name") %>%
+    inner_join(sample_ID, by = "sample_name") %>%
+    #separate(treatment, c("treatment", "replicate"), sep = -1) %>%
+    ggplot(mapping = aes(x = MDS1, y = MDS2, fill = treatment, colour = treatment, shape = timepoint)) +
+    geom_point() +
+    scale_colour_manual(values = GEOM_COL_COLOURS) +
+    ggtitle("nMDS based on eggNOGS") +
+    ylab("NMDS2") +
+    xlab(paste0("NMDS1\n", "stress=", round(nmds$stress, 3))) 
+    ggsave("../results/NMDS_hellinger_eggNOG.png")
+  
+  
+  PCA <- rda(orf_mat_hellinger, distance = "bray") 
+  
+   eigenvalues <- as.data.frame(PCA$CA$eig) %>%
+    rownames_to_column("PC_axes") %>%
+    rename(eigenvalues = "PCA$CA$eig") %>%
+    mutate(eigenvalues_variation_explained = (eigenvalues/sum(eigenvalues) * 100))
+   
+   as.data.frame(PCA$CA$u) %>%
+     rownames_to_column("sample_name") %>%
+     inner_join(sample_ID, by = "sample_name") %>%
+     #separate(treatment, c("treatment", "replicate"), sep = -1) %>%
+     ggplot(mapping = aes(x = PC1, y = PC2, fill = treatment, colour = treatment, shape = timepoint)) +
+     geom_point() +
+     scale_colour_manual(values = GEOM_COL_COLOURS) +
+     xlab(paste("PC1", round(eigenvalues$eigenvalues_variation_explained[1], digits = 2),"%", sep = " ")) +
+     ylab(paste("PC2", round(eigenvalues$eigenvalues_variation_explained[2], digits = 2),"%", sep = " ")) +
+     ggtitle("PCA based on eggNOGS") +
+     theme_minimal() +
+     theme(panel.grid = element_blank()) +
+      geom_vline(xintercept = 0, linetype = "dashed", size = 0.5) +
+     geom_hline(yintercept=0, linetype="dashed", size = 0.5) 
+     ggsave("../results/PCA_hellinger_eggNOGS.png")
+```
+
+```{r PERMANOVA}
+
+```
+
+# Stacked bars for visualization of taxonomy
+```{r}
+#Create taxonomy layout with top10 phyla, or class or order for example.
+top12 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(treatment, timepoint, orf) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(taxonomy, by = "orf") %>%
+  group_by(phylum) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:12) %>%
+  .$phylum
+
+# Line for mutating in the new annotation using 12 families only, and rest in other category
+#mutate(Group = ifelse(grepl(paste(top10, collapse = "|"), family), paste0(family), "other"))
+
+ #Adding one more colour to the scale
+  GEOM_COL_COLOURS1 = c(GEOM_COL_COLOURS, "#000000")
+  
+ bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  dplyr::select(-tpm) %>%
+  group_by(treatment,timepoint) %>%
+            mutate(t = count/Length) %>%
+            mutate(tpm = t/sum(t)*1e6) %>%
+            ungroup() %>%
+  inner_join(taxonomy, by = "orf") %>%
+  mutate(Group = ifelse(grepl(paste(top12P, collapse = "|"), phylum), paste0(phylum), "other")) %>%
+  group_by(treatment, timepoint, Group) %>% #Summarising mean tpm per timepoint and treatment per group
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x= timepoint, y = tpm, fill = fct_relevel(Group, "other", after = 10))) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60), panel.background = element_blank()) +
+  scale_fill_manual('phylum', values = GEOM_COL_COLOURS1) +
+  ylab("Relative abundance") +
+  xlab("Day") +
+  ggtitle("taxnomy of reads, phylum level") 
+  ggsave("../results/taxonomy_phylum.png")
+
+#Plotting again but with class
+ top12 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(treatment, timepoint, orf) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(taxonomy, by = "orf") %>%
+  group_by(class) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:12) %>%
+  .$class
+ 
+ #Mutate tpm per timepoint and treatment instead, summarising the replicates in an easy way and everything will align to 1 mill..., more correct I think
+bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  dplyr::select(-tpm) %>%
+  group_by(treatment,timepoint) %>%
+            mutate(t = count/Length) %>%
+            mutate(tpm = t/sum(t)*1e6) %>%
+            ungroup() %>%
+  inner_join(taxonomy, by = "orf") %>%
+  mutate(Group = ifelse(grepl(paste(top12, collapse = "|"), class), paste0(class), "other")) %>%
+  group_by(treatment, timepoint, Group) %>% #Summarising mean tpm per timepoint and treatment per group
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x= timepoint, y = tpm, fill = fct_relevel(Group, "other", after = 10))) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60), panel.background = element_blank()) +
+  scale_fill_manual('class', values = GEOM_COL_COLOURS1) +
+  ylab("Relative abundance") +
+  xlab("Day") +
+  ggtitle("Taxonomy of reads, class level") 
+  ggsave("../results/taxonomy_class.png")
+
+#Plotting again but with order
+ top12 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(treatment, timepoint, orf) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(taxonomy, by = "orf") %>%
+  group_by(order) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:12) %>%
+  .$order
+ 
+bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  dplyr::select(-tpm) %>%
+  group_by(treatment,timepoint) %>%
+            mutate(t = count/Length) %>%
+            mutate(tpm = t/sum(t)*1e6) %>%
+            ungroup() %>%
+  inner_join(taxonomy, by = "orf") %>%
+  mutate(Group = ifelse(grepl(paste(top12, collapse = "|"), order), paste0(order), "other")) %>%
+  group_by(treatment, timepoint, Group) %>% #Summarising mean tpm per timepoint and treatment per group
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x= timepoint, y = tpm, fill = fct_relevel(Group, "other", after = 10))) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60), panel.background = element_blank()) +
+  scale_fill_manual('order', values = GEOM_COL_COLOURS1) +
+  ylab("Relative abundance") +
+  xlab("Day") +
+  ggtitle("Taxonomy of reads, order level") 
+  ggsave("../results/taxonomy_order.png")
+
+#Plotting again but with family
+ top12 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(treatment, timepoint, orf) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(taxonomy, by = "orf") %>%
+  group_by(family) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:12) %>%
+  .$family
+ 
+bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  dplyr::select(-tpm) %>%
+  group_by(treatment,timepoint) %>%
+            mutate(t = count/Length) %>%
+            mutate(tpm = t/sum(t)*1e6) %>%
+            ungroup() %>%
+  inner_join(taxonomy, by = "orf") %>%
+  mutate(Group = ifelse(grepl(paste(top12, collapse = "|"), family), paste0(family), "other")) %>%
+  group_by(treatment, timepoint, Group) %>% #Summarising mean tpm per timepoint and treatment per group
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x= timepoint, y = tpm, fill = fct_relevel(Group, "other", after = 10))) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60), panel.background = element_blank()) +
+  scale_fill_manual('family', values = GEOM_COL_COLOURS1) +
+  ylab("Relative abundance") +
+  xlab("Day") +
+  ggtitle("taxonomy of reads, family level") 
+  ggsave("../results/taxonomy_family.png")
+```
+
+```{r top_genes}
+annotated_counts <- bbmap_p %>%
+  inner_join(eggnogs, by = "orf") %>% #6674350 rows
+  inner_join(sample_ID, by = "sample") 
+
+#Top50 genes overall are not stress genes, very good sign! Rather ammonium transport, photosystem, flagellar motorproteins, and others.
+annotated_counts %>%
+  group_by(orf) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:50) %>% 
+  inner_join(eggnogs, by = "orf") %>% 
+  view()
+
+#Top genes per treatment
+top50 <- annotated_counts %>%
+  group_by(treatment, orf) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  group_by(treatment) %>%
+  arrange(desc(tpm)) %>%
+  top_n(50, tpm) %>% 
+  ungroup() %>%
+  inner_join(eggnogs, by = "orf") %>% 
+  select(orf, Preferred_name, best_og_desc, treatment) 
+
+#Plotting the genes, first in a venn diagram
+#Creating vectores with the top15 asv's per treatment
+C_orf <- top50 %>%
+  filter(treatment == "C") %>%
+  .$orf
+
+T_orf <- top50 %>%
+  filter(treatment == "T") %>%
+  .$orf
+
+N_orf <- top50 %>%
+  filter(treatment == "N") %>%
+  .$orf
+
+TN_orf <- top50 %>%
+  filter(treatment == "NT") %>%
+  .$orf
+
+venn.diagram(
+  x = list(C_orf, N_orf, T_orf, TN_orf),
+  category.names = c("C" , "N", "T","TN"),
+  filename = '../results/top50_shared.png',
+  output=TRUE
+)
+
+# Interestingly not as many shared between all treatments, and quite a few unique genes for the T-treatments
+```
+
+```{r eggnog_cats_per_treatment, eval=FALSE}
+p <- annotated_counts %>%
+  separate_rows(best_og_cat, sep = '(?<=.)(?=.)') %>%
+  group_by(treatment,best_og_cat) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = treatment, y = tpm, fill = best_og_cat)) +
+  geom_col(position = "dodge")
+
+ggplotly(p)
+
+#Categories high in C - P
+ # Categories high in low temp - C, J
+
+# Legend
+  # P - Inorganic ion transport and metabolism (Maybe membrane potential?)
+  # C - Energy production and conversion 
+  # J - Translation, ribosomal structure and biogenesis
+
+```
+
+# The gene list and genes expressed
+```{r}
+bbmap_p %>%
+  inner_join(eggnogs, by = "orf") %>%
+  inner_join(target_genes %>% rename(Preferred_name = "gene"), by = "Preferred_name") %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(timepoint, treatment, Preferred_name) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(target_genes %>% rename(Preferred_name = "gene")) %>%
+  ggplot(mapping = aes(x = Preferred_name, y = tpm, group = timepoint, fill = timepoint)) +
+  geom_col(position = "dodge") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  facet_wrap(~ treatment)
+```
+
+# Identifying DE-genes
+```{r}
+#EdgeR-analysis, orfs on rows and samples as colnames
+bbmap_mat <- bbmap_p %>%
+  dplyr::select(orf, sample, count) %>%
+  spread(sample, count, fill = 0) %>%
+  column_to_rownames("orf") %>%
+  as.matrix()
+
+library(edgeR)
+
+y <- DGEList(bbmap_mat)
+
+#Changing the grouping to the known treatments from mesocosm.
+y$samples$group = sample_ID %>% select(sample, treatment) %>% .$treatment
+
+#It has been correctly done as they match with the original sample file
+groupF <- y$samples$group
+
+#Another way of verifying
+match(rownames(y$samples), colnames(bbmap_mat))
+
+y <- DGEList(counts=bbmap_mat, group=groupF)
+
+keep <- filterByExpr(y, group=groupF)
+
+y <- y[keep, , keep.lib.sizes=FALSE]
+
+y <- calcNormFactors(y)
+
+y$samples
+
+#The design-matrix doesn't like non-numeric categories, so here is a numeric corresponding to orignal levels, key =
+# 1 = T, 2 = C, 3 = N, 4 = NT
+design_m <- y$samples %>% select(group) %>%
+  mutate(group = c(1,1,1,2,2,2,3,3,3,4,4,4,1,1,1,2,2,2,3,3,3,4,4,4))
+
+y <- estimateDisp(y, design = design_m)
+
+plotBCV(y)
+
+#Creating a designmatrix (this looks like the correct structure), C is the base treatment, exlcuding intercept column.
+trial_mat <- model.matrix(~0+groupF)
+
+fit <- glmQLFit(y, trial_mat)
+
+fit
+
+#Comparing C vs NT
+colnames(trial_mat) = c("C","N","NT","T")
+
+fit <- glmQLFit(y, trial_mat)
+
+CvsNT <- makeContrasts(C-NT, levels=trial_mat)
+
+qlf <- glmQLFTest(fit, contrast=CvsNT)
+
+#Most changing genes
+topTags(qlf)
+
+#Summaroy of genes up/downregulated, upregulated in this case refes to upregulated in C-treatment, negative is upregulated in TN-treatment.
+
+summary(decideTests(qlf))
+# Blue lines indicate 2-fold changes
+
+pdf("../results/edgeRCvsTN2logFC.pdf")
+plotMD(qlf)
+abline(h=c(-1, 1), col="blue")
+dev.off()
+
+#Trying to look at the fold changes the edgeR way
+tr <- glmTreat(fit, contrast=CvsNT, lfc=log2(2.5))
+
+#The summary lets us know there are 1015 genes upregulated in  the C-treatment, and 4045 upregulated in  the TN treatment at a 2.5 logFC value.
+summary(decideTests(tr))
+
+#Doing the same but setting treshold to 2.5 logFC
+pdf("../results/edgeRCvsTN2logFC2.5.pdf")
+plotMD(tr)
+abline(h=c(-2.5, 2.5), col="blue")
+dev.off()
+
+#Looking at the most abundantly differentially expressed genes
+
+
+# Quick looks shows proteases, ribosomal proteins and chaperones again, but where are they higher expressed, compared to C-treatment?
+bbmap_p %>% filter(orf %in% c(rownames(topTags(qlf)))) %>%
+  inner_join(eggnogs, by = "orf") %>%
+  select(sample, count, Preferred_name, best_og_desc) %>% view()
+
+#Accessing the LogFC table
+DEGs <- tr$table
+
+#Filtering out logFC change of 2.5 or larger in any direction to compare
+DEGs %>%
+  filter(logFC > 2.5 | logFC < -2.5) %>%
+  filter(PValue < 0.05) 
+```
+
+# Investigating the logFC genes in the C-treatment
+```{r}
+DEGs <- tr$table %>%
+  filter(logFC > 2.5) %>%
+  rownames_to_column("orf") %>%
+  filter(PValue < 0.05) %>% #J0in in annotation
+  left_join(eggnogs %>% select(orf, Preferred_name, best_og_desc), by = "orf")
+
+#SAving the table for quick work
+
+write_tsv(DEGs, "../data/DEGenesCvsTN_2.5.tsv")
+
+DEGs <- read_tsv("../data/DEGenesCvsTN_2.5.tsv")
+
+#Plot the sum of the genes in respective treatment to make sure everything looks correct
+
+#Geting the Geneid's for subsetting
+C_enrich <- DEGs %>%
+  filter(logFC > 2.5) %>%
+  filter(PValue < 0.05) %>%
+  pull(orf)
+
+plot_df <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(timepoint, treatment, orf) %>%
+  summarise(count = mean(count)) %>%
+  ungroup() %>%
+  inner_join(bbmap_p %>% distinct(orf, Length), by = "orf") %>%
+  group_by(timepoint, treatment) %>% #Mutating tpm per timepoint and treatment
+  mutate(t = count/Length) %>%
+  mutate(tpm = t/sum(t)*1e6) %>%
+  ungroup() %>%
+  dplyr::select(-t) %>%
+  dplyr::filter(orf %in% C_enrich)
+
+#Seems to work very well! Judging from this temperature seems to be the larger difference.
+plot_df %>%
+  filter(orf %in% C_enrich[1:10]) %>%
+  ggplot(mapping = aes(x = treatment, y = tpm, group = orf, fill = orf)) +
+  geom_col() +
+  scale_fill_manual(values = GEOM_COL_COLOURS)
+
+#Appears to be a lot of ribosomal proteins involved in this.
+eggnogs %>%
+  filter(orf %in% C_enrich[1:10]) 
+
+```
+## Fisher modules
+```{r}
+#Trying to do an overview of the overrepresented categories as compared to the rest of the genes.
+kegg_module = eggnogs %>% distinct(orf, KEGG_Module) %>% filter(!is.na(KEGG_Module))
+
+#Unique kegg modules for the genes enriched
+unique_kegg_module <- eggnogs %>%
+  filter(orf %in% C_enrich) %>%
+  distinct(orf, KEGG_Module) %>% 
+  filter(!is.na(KEGG_Module)) %>%
+  filter(KEGG_Module != "-") %>%
+  separate_rows(KEGG_Module, sep = ",") %>%
+  distinct(KEGG_Module) %>%
+  pull(KEGG_Module)
+
+fisher_result = list()
+
+matr = matrix(ncol = 5, nrow = 1)
+rownames(matr) = c("up") # groups
+colnames(matr) = c("#genes in group", "#pval<0.05 modules", "pval<0.05 modules", "#qval<0.05 modules", "qval<0.05 modules")
+
+up_kegg_modules <- eggnogs %>% 
+  filter(orf %in% C_enrich) %>%
+  separate_rows(KEGG_Module, sep = ",") %>% 
+  filter(KEGG_Module != "-") %>%
+  pull(KEGG_Module)
+
+other_kegg_modules <- eggnogs %>% 
+  dplyr::filter(!orf %in% C_enrich) %>%
+  dplyr::filter(KEGG_Module != "-") %>%
+  separate_rows(KEGG_Module, sep = ",") %>% 
+  pull(KEGG_Module)
+
+
+
+
+pval = rep(NA, length(unique_kegg_module))
+for (k in 1:length(unique_kegg_module)) {  
+    test_matr = matrix(ncol = 2, nrow = 2)
+    colnames(test_matr) = c("up_clust", "nonDE_clust") # ie belongs to cluster / do not belong to cluster
+    rownames(test_matr) = c("in_module", "out_module") # ie belongs to module / do not belong to module
+    test_matr[1,1] = length(which(up_kegg_modules == unique_kegg_module[k]))
+    test_matr[1,2] = length(which(other_kegg_modules == unique_kegg_module[k]))
+    test_matr[2,1] = length(up_kegg_modules) - length(which(up_kegg_modules == unique_kegg_module[k]))
+    test_matr[2,2] = length(other_kegg_modules) - length(which(other_kegg_modules == unique_kegg_module[k]))
+    pval[k] = fisher.test(test_matr, alternative = "greater")$p.value # p.value for that module k is enriched in cluster j
+}
+qval = p.adjust(pval, method = "fdr")
+matr[1,1] = length(up_kegg_modules)
+matr[1,2] = length(which(pval < 0.05))
+matr[1,3] = sort(paste(unique_kegg_module[which(pval < 0.05)], collapse = ","))
+matr[1,4] = length(which(qval < 0.05))
+matr[1,5] = sort(paste(unique_kegg_module[which(qval < 0.05)], collapse = ","))
+```
+
+```{r}
+# Elucidating the modules that were overrepresented in the genes upregulated in the C-treatment.
+matr %>%
+  as.data.frame() %>%
+  write_tsv(.,"../data/enrichment_modules_C.tsv")
+
+enriched <- matr[1,5] 
+
+enriched_cats <- c("M00620","M00157","M00174","M00528","M00804","M00178","M00179","M00335","M00183","M00432","M00394","M00742","M00529","M00530","M00607")
+  
+```
+
+```{r}
+#Legend for categories
+#M00620 - Incomplete reductive citrate cycle, acetyl-CoA => oxoglutarate
+
+#M00157 - F-type ATPase, prokaryotes and chloroplasts
+
+#M00174 - Methane oxidation, methanotroph, methane => formaldehyde
+
+#M00528 - Nitrification, ammonia => nitrite
+
+#M00804 - Complete nitrification, comammox, ammonia => nitrite => nitrate
+
+#M00178 - no entry found 
+
+#M00179 - no entry found
+
+#M00335 - no entru found 
+
+#M00183 - no entry found 
+
+#M00432 -  Leucine biosynthesis, 2-oxoisovalerate => 2-oxoisocaproate
+
+#M00394 - no entry 
+
+#M00742 - no entry
+
+#M00529 - Denitrification, nitrate => nitrogen
+
+#M00530 - Dissimilatory nitrate reduction, nitrate => ammonia
+
+#M00607 - no entry again, what is wrong with the annotation, different versions of KEGG and emapper?
+```
+##  Fishers' test Pathway level
+```{r}
+#Trying to do an overview of the overrepresented categories as compared to the rest of the genes.
+kegg_pathway = eggnogs %>% distinct(orf, KEGG_Pathway) %>% filter(!is.na(KEGG_Pathway))
+
+#Unique kegg modules for the genes enriched
+unique_kegg_pathway <- eggnogs %>%
+  filter(orf %in% C_enrich) %>%
+  distinct(orf, KEGG_Pathway) %>% 
+  filter(!is.na(KEGG_Pathway)) %>%
+  filter(KEGG_Pathway != "-") %>%
+  separate_rows(KEGG_Pathway, sep = ",") %>%
+  distinct(KEGG_Pathway) %>%
+  pull(KEGG_Pathway)
+
+fisher_result = list()
+
+matr = matrix(ncol = 5, nrow = 1)
+rownames(matr) = c("up") # groups
+colnames(matr) = c("#genes in group", "#pval<0.05 pathways", "pval<0.05 pathways", "#qval<0.05 pathways", "qval<0.05 pathways")
+
+up_kegg_pathways <- eggnogs %>% 
+  filter(orf %in% C_enrich) %>%
+  separate_rows(KEGG_Pathway, sep = ",") %>% 
+  filter(KEGG_Pathway != "-") %>%
+  pull(KEGG_Pathway)
+
+other_kegg_pathways <- eggnogs %>% 
+  dplyr::filter(!orf %in% C_enrich) %>%
+  dplyr::filter(KEGG_Pathway != "-") %>%
+  separate_rows(KEGG_Pathway, sep = ",") %>% 
+  pull(KEGG_Pathway)
+
+
+
+
+pval = rep(NA, length(unique_kegg_pathway))
+for (k in 1:length(unique_kegg_pathway)) {  
+    test_matr = matrix(ncol = 2, nrow = 2)
+    colnames(test_matr) = c("up_clust", "nonDE_clust") # ie belongs to group of interest / do not belong to group of interest
+    rownames(test_matr) = c("in_pathway", "out_pathway") # ie belongs to module / do not belong to module
+    test_matr[1,1] = length(which(up_kegg_pathways == unique_kegg_pathway[k]))
+    test_matr[1,2] = length(which(other_kegg_pathways == unique_kegg_pathway[k]))
+    test_matr[2,1] = length(up_kegg_pathways) - length(which(up_kegg_pathways == unique_kegg_pathway[k]))
+    test_matr[2,2] = length(other_kegg_pathways) - length(which(other_kegg_pathways == unique_kegg_pathway[k]))
+    pval[k] = fisher.test(test_matr, alternative = "greater")$p.value # p.value for that module k is enriched in cluster j
+}
+qval = p.adjust(pval, method = "fdr")
+matr[1,1] = length(up_kegg_pathways)
+matr[1,2] = length(which(pval < 0.05))
+matr[1,3] = sort(paste(unique_kegg_pathway[which(pval < 0.05)], collapse = ","))
+matr[1,4] = length(which(qval < 0.05))
+matr[1,5] = sort(paste(unique_kegg_pathway[which(qval < 0.05)], collapse = ","))
+```
+
+```{r}
+matr %>%
+  as.data.frame() %>%
+  write_tsv(.,"../data/enrichment_pathways_C.tsv")
+
+#Since we are counting the number of pathways rather than genes, the numbers get extremely high also not duplications due to KO and MAP, these prefixes should b removed
+enriched <- matr[1,5] 
+
+#Check that test is correct, if so some of the pathways are of interest, in particular
+
+#ko02040 - flagellar assembly, but expected in C-treatment?
+
+```
+
+#Comparing instead genes related with increases in maintenance respiration
+```{r}
+#Create the design matrix for the samples focusing on the Rm_values, first do an NMDS of gene expr using  Rm-values, is it clear?
+design_m <- sample_ID %>%
+  select(sample, treatment, tre_rep) %>%
+  inner_join(Rm %>% select(Rm_Rsb, tre_rep), by = "tre_rep") %>%
+  select(sample, Rm_Rsb)
+
+y <- DGEList(bbmap_mat)
+
+#Changing the grouping to the RM-values
+y$samples$group = sample_ID %>% select(sample, treatment, tre_rep) %>% inner_join(Rm %>% select(Rm_Rsb, tre_rep), by = "tre_rep") %>%
+  select(sample, Rm_Rsb) 
+
+#It has been correctly done as they match with the original sample file
+groupF <- y$samples$group
+
+#Another way of verifying
+match(rownames(y$samples), colnames(bbmap_mat))
+
+```
+
+# Identifying overrepresented categories
+```{r}
+
+```
