@@ -23,15 +23,19 @@ library(pheatmap)
 library(data.table)
 ```
 
-```{r R_colours}
-GEOM_COL_COLOURS = c(
-  RColorBrewer::brewer.pal(12, name = 'Paired'))
-```
-
 ```{r constants}
 SIGNIFICANCE = 0.05
 DIFF_TRESHOLD = 2.5
 ```
+
+```{r R_colours}
+GEOM_COL_COLOURS = c(
+  RColorBrewer::brewer.pal(12, name = 'Paired'))
+
+TREAT_COLOURS <- c("blue","green3","red","yellow4")
+```
+
+
 
 ```{r files}
 #File to connect NGI ID with our own classification ID, add the µ-values to this file for testing later, or do that in a sep file?
@@ -79,7 +83,9 @@ mu_values <- read_tsv("../data/mu.tsv")
 Rm <- read_tsv("../data/Rm_values.tsv") %>%
    mutate(tre_rep = paste(timepoint, treatment, replicate, sep = "")) 
 
+nut_conc <- read_tsv("../data/nutrient_concentrations.tsv") # Are in microG/L
 
+module_legend <- read_tsv("../data/module_legend.tsv", col_names = c("KEGG_Module","Entry"))
 ```
 
 ```{r read_overview}
@@ -419,6 +425,7 @@ Should I perhaps lump together the unclassified Flavobacteriales with the NA?
 #I need to set the variables, 1. taxonomic level (e.g phylum, order), 2. Group to summarise on e.g bacteroidetes/chlorobi group. 
 
 tax_magnify <- function(taxlevel = "phylum", taxdf = taxonomy,  g = "Bacteroidetes/Chlorobi group", sampledf = sample_ID) {
+
   
   top11 <- bbmap_p %>%
     inner_join(taxdf, by= "orf") %>%
@@ -459,25 +466,74 @@ tax_magnify <- function(taxlevel = "phylum", taxdf = taxonomy,  g = "Bacteroidet
 ```
 
 ```{r bacteroidetes_chlorobi_families}
-tax_magnify()
+p1 <- tax_magnify()
 ```
 
 ### Alphaproteobacteria
 The proteobacterial expression was mainly explained by Alpha, Beta- and Gammaproteobacteria, with the highest fraction of Alphaproteobacteria in the T-treatment. Gammaproteobacteria was more common in the TN-treatment. Roughly half of the  alphaproteobacterial expression was derived from Rhodobacteraceae and Surface 1-category, the latter being part of the SAR11-clade and constituted by unclassified bacteria or the genus Pelagibacter sp.. The expression composition was similar across all treatments, with the tendency of higher expression by unknown Alphaproteobacteria at day 17 in the TN treatment.
 ```{r}
-tax_magnify(taxlevel = "class", g = "Alphaproteobacteria")
+p2 <- tax_magnify(taxlevel = "class", g = "Alphaproteobacteria")
 ```
 
 ### Gammaproteobacteria
 In Gammaproteobacteria, expression composition was markedly different in the N-treatment as more than 25% of expression was explained by *Shewanellaceae* at both timepoints. In the TN-treatment Oceanospirillaceae was instead the most prominent during day 10 while expression was more even during day 17. The C-treatment showed the most diverse expression composition with the larger groups comprising Environmental Gammaproteobacteria and NA. 
 ```{r}
-tax_magnify(taxlevel = "class", g = "Gammaproteobacteria")
+p3 <- tax_magnify(taxlevel = "class", g = "Gammaproteobacteria")
 ```
 
 ### Thaumarchaeota
 The expression was represented mainly by undetermined thaumarchaeota families, of which the Genus *Nitrosopumilus sp.* was a member, a small fraction was attributed to the Cenarchaeaceae family.
 ```{r}
-tax_magnify(taxlevel = "phylum", g = "Thaumarchaeota")
+p4 <- tax_magnify(taxlevel = "phylum", g = "Thaumarchaeota")
+```
+
+## Plotting all the family plots together
+```{r}
+p_combined <- p1 + p2 + p3 + p4
+
+p_combined
+
+ggsave("../results/nested_families.png", plot = p_combined, height = 20, width = 35, units = "cm")
+```
+
+### Nitrospira
+```{r}
+ bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  dplyr::select(-tpm) %>%
+  group_by(treatment,timepoint) %>%
+            mutate(t = count/Length) %>%
+            mutate(tpm = t/sum(t)*1e6) %>%
+            ungroup() %>%
+  inner_join(taxonomy, by = "orf") %>%
+  group_by(treatment, timepoint, genus) %>% #Summarising mean tpm per timepoint and treatment per group
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  filter(genus == "Nitrospira genus") %>%
+  ggplot(mapping = aes(x= timepoint, y = tpm)) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60), panel.background = element_blank()) +
+  scale_fill_manual('phylum', values = GEOM_COL_COLOURS) +
+  ylab("Relative abundance") +
+  xlab("Day") +
+  ggtitle("Nitrospira sp. reads") 
+```
+
+### Table with genus abundances (tpm)
+```{r}
+bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  dplyr::select(-tpm) %>%
+  group_by(treatment,timepoint) %>%
+            mutate(t = count/Length) %>%
+            mutate(tpm = t/sum(t)*1e6) %>%
+            ungroup() %>%
+  inner_join(taxonomy, by = "orf") %>%
+  group_by(treatment, timepoint, genus) %>% #Summarising mean tpm per timepoint and treatment per group
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>% 
+  write_tsv("../results/genus_abundances.tsv")
 ```
 
 # Kegg-pathways stacked bars
@@ -710,61 +766,61 @@ top50 <-  bbmap_p %>%
 top50
 
 #Module legend
-  #M00178 - No entry
-  #M00179 - No entry
-  #M00157 - F-type ATPase, prokaryotes and chloroplast
-  #M00237 - No entry
-  #M00804 - Complete nitrification, comammox, ammonia => nitrite => nitrate
-  #M00174 - Methane oxidation, methanotroph, methane => formaldehyde
-  #M00528 - Nitrification, ammonia => nitrite
-  #M00222 - No entry
-  #M00183 - No entry
-  #M00009 - Citrate cycle (TCA cycle, Krebs cycle)
-  #M00335 - No entry
-  #M00011 - Citrate cycle, second carbon oxidation, 2-oxoglutarate => oxaloacetate
-  #M00173 - Reductive citrate cycle (Arnon-Buchanan cycle)
-  #M00083 - Fatty acid biosynthesis, elongation
-  #M00529 - Denitrification, nitrate => nitrogen
-  #M00374 - Dicarboxylate-hydroxybutyrate cycle
-  #M00360 - No entry
-  #M00359 - No entry
-  #M00232 - No entry 
-  #M00082 - Fatty acid biosynthesis, initiation
-  #M00012 - Glyoxylate cycle
-  #M00570 - Isoleucine biosynthesis, threonine => 2-oxobutanoate => isoleucine
-  #M00019 - Valine/isoleucine biosynthesis, pyruvate => valine / 2-oxobutanoate => isoleucine
-  #M00053 - Deoxyribonucleotide biosynthesis, ADP/GDP/CDP/UDP => dATP/dGTP/dCTP/dUTP
-  #M00048 - De novo purine biosynthesis, PRPP + glutamine => IMP
-  #M00742 - No entry
-  #M00144 - NADH:quinone oxidoreductase, prokaryotes
-  #M00155 - Cytochrome c oxidase, prokaryotes
-  #M00087 - beta-Oxidation
-  #M00003 - Gluconeogenesis, oxaloacetate => fructose-6P
-  #M00376 - 3-Hydroxypropionate bi-cycle
-  #M00532 - Photorespiration
-  #M00373 - Ethylmalonyl pathway
-  #M00001 - Glycolysis (Embden-Meyerhof pathway), glucose => pyruvate
-  #M00017 - Methionine biosynthesis, aspartate => homoserine => methionine
-  #M00572 - Pimeloyl-ACP biosynthesis, BioC-BioH pathway, malonyl-ACP => pimeloyl-ACP
-  #M00032 - Lysine degradation, lysine => saccharopine => acetoacetyl-CoA
-  #M00740 - Methylaspartate cycle
-  #M00620 - Incomplete reductive citrate cycle, acetyl-CoA => oxoglutarate
-  #M00036 - Leucine degradation, leucine => acetoacetate + acetyl-CoA
-  #M00172 - C4-dicarboxylic acid cycle, NADP - malic enzyme type
-  #M00169 - CAM (Crassulacean acid metabolism), light
-  #M00016 - Lysine biosynthesis, succinyl-DAP pathway, aspartate => lysine
-  #M00346 - Formaldehyde assimilation, serine pathway
-  #M00236 - No entry
-  #M00165 - Reductive pentose phosphate cycle (Calvin cycle)
-  #M00307 - Pyruvate oxidation, pyruvate => acetyl-CoA
-  #M00151 - Cytochrome bc1 complex respiratory unit
-  #M00152 - Cytochrome bc1 complex
-  #M00394 - No entry.
+#M00178 - No entry
+#M00179 - No entry
+#M00157 - F-type ATPase, prokaryotes and chloroplast
+#M00237 - No entry
+#M00804 - Complete nitrification, comammox, ammonia => nitrite => nitrate
+#M00174 - Methane oxidation, methanotroph, methane => formaldehyde
+#M00528 - Nitrification, ammonia => nitrite
+#M00222 - No entry
+#M00183 - No entry
+#M00009 - Citrate cycle (TCA cycle, Krebs cycle)
+#M00335 - No entry
+#M00011 - Citrate cycle, second carbon oxidation, 2-oxoglutarate => oxaloacetate
+#M00173 - Reductive citrate cycle (Arnon-Buchanan cycle)
+#M00083 - Fatty acid biosynthesis, elongation
+#M00529 - Denitrification, nitrate => nitrogen
+#M00374 - Dicarboxylate-hydroxybutyrate cycle
+#M00360 - No entry
+#M00359 - No entry
+#M00232 - No entry 
+#M00082 - Fatty acid biosynthesis, initiation
+#M00012 - Glyoxylate cycle
+#M00570 - Isoleucine biosynthesis, threonine => 2-oxobutanoate => isoleucine
+#M00019 - Valine/isoleucine biosynthesis, pyruvate => valine / 2-oxobutanoate => isoleucine
+#M00053 - Deoxyribonucleotide biosynthesis, ADP/GDP/CDP/UDP => dATP/dGTP/dCTP/dUTP
+#M00048 - De novo purine biosynthesis, PRPP + glutamine => IMP
+#M00742 - No entry
+#M00144 - NADH:quinone oxidoreductase, prokaryotes
+#M00155 - Cytochrome c oxidase, prokaryotes
+#M00087 - beta-Oxidation
+#M00003 - Gluconeogenesis, oxaloacetate => fructose-6P
+#M00376 - 3-Hydroxypropionate bi-cycle
+#M00532 - Photorespiration
+#M00373 - Ethylmalonyl pathway
+#M00001 - Glycolysis (Embden-Meyerhof pathway), glucose => pyruvate
+#M00017 - Methionine biosynthesis, aspartate => homoserine => methionine
+#M00572 - Pimeloyl-ACP biosynthesis, BioC-BioH pathway, malonyl-ACP => pimeloyl-ACP
+#M00032 - Lysine degradation, lysine => saccharopine => acetoacetyl-CoA
+#M00740 - Methylaspartate cycle
+#M00620 - Incomplete reductive citrate cycle, acetyl-CoA => oxoglutarate
+#M00036 - Leucine degradation, leucine => acetoacetate + acetyl-CoA
+#M00172 - C4-dicarboxylic acid cycle, NADP - malic enzyme type
+#M00169 - CAM (Crassulacean acid metabolism), light
+#M00016 - Lysine biosynthesis, succinyl-DAP pathway, aspartate => lysine
+#M00346 - Formaldehyde assimilation, serine pathway
+#M00236 - No entry
+#M00165 - Reductive pentose phosphate cycle (Calvin cycle)
+#M00307 - Pyruvate oxidation, pyruvate => acetyl-CoA
+#M00151 - Cytochrome bc1 complex respiratory unit
+#M00152 - Cytochrome bc1 complex
+#M00394 - No entry.
 
-# While a lot of the abundant modules have no entry in the database. Among the most abundant modules are the over-represented categories in nitrogen metabolism, along with denitrification and methane oxidation (most likely ammonia oxidation, but not necessarily). Other abundant categories included the TCA-cycle, reductive TCA-cycle,an ATPase and fatty acid biosynthesis (elongation). Interestingly, since not many were found to be over-represented, instead characteristics for the entire community included modules in Nitrogen metabolism, such as comammox, denitrification, and  dissimilatory nitrate reduction.
+#While a lot of the abundant modules have no entry in the database. Among the most abundant modules are the over-represented categories in nitrogen metabolism, along with denitrification and methane oxidation (most likely ammonia oxidation, but not necessarily). Other abundant categories included the TCA-cycle, reductive TCA-cycle,an ATPase and fatty acid biosynthesis (elongation). Interestingly, since not many were found to be over-represented, instead characteristics for the entire community included modules in Nitrogen metabolism, such as comammox, denitrification, and  dissimilatory nitrate reduction.
 
 #Create table with top 50, and annotate whether or not they are over-represented
-bbmap_p %>%
+top_50_mods <- bbmap_p %>%
   inner_join(sample_ID, by = "sample") %>%
   dplyr::select(-tpm) %>%
   group_by(treatment,timepoint) %>%
@@ -777,7 +833,8 @@ bbmap_p %>%
   summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
   filter(KEGG_Module != "-") %>%
-  arrange(desc(tpm))
+  arrange(desc(tpm)) %>%
+  inner_join(module_legend, by = "KEGG_Module","Module") 
 ```
 
 ```{r eggnog_cats_per_treatment, eval=FALSE}
@@ -821,6 +878,7 @@ bbmap_p %>%
 ```{r}
 DEGs <- read_tsv("../results/DEG.tsv")
 ```
+
 ## C-treatment
 ```{r}
 C_up <- DEGs %>%
@@ -835,6 +893,15 @@ C_up <- DEGs %>%
   filter(best_og_desc == "Ammonium Transporter") 
 
 #Among the genes upregulated in the C-treatment, were several ammonium transporters (>10) all belonging to Thaumarchaeota. Different secretion systems, and genes that are part of the lux-regulon (quorom-sensing).
+ 
+ C_up %>%
+  left_join(taxonomy, by = "orf") %>%
+  group_by(class) %>%
+  tally() %>%
+  ungroup() %>%
+  arrange(desc(n)) %>%
+  mutate(percentage = n/sum(n) * 100) %>%
+  write_tsv("../results/C_up_summary.tsv")
 ```
 
 ## TN-treatment
@@ -851,6 +918,120 @@ TN_up <- DEGs %>%
   filter(logFC <= -DIFF_TRESHOLD) %>%
   select(orf) %>%
   left_join(eggnogs, by = "orf")
+
+TN_up %>%
+  left_join(taxonomy, by = "orf") %>%
+  group_by(class) %>%
+  tally() %>%
+  ungroup() %>%
+  arrange(desc(n)) %>%
+  mutate(percentage = n/sum(n) * 100) %>%
+  write_tsv("../results/TN_up_summary.tsv")
+```
+
+## Nutrient concentrations plot
+```{r}
+nut_conc %>%
+  mutate(Sampling = as.factor(Sampling)) %>%
+  ggplot(mapping = aes(x = TDN, y = TDP)) +
+  geom_point(aes(shape = Sampling)) +
+  facet_wrap( ~ Treatment)
+
+#TDN
+nut_conc %>%
+  group_by(Sampling, Treatment) %>%
+  summarise(mean_tdp = mean(TDP), stdev_tdp = sd(TDP),
+            mean_tdn = mean(TDN), stdev_tdn = sd(TDN)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = Sampling, y = mean_tdn)) +
+  geom_line(aes(x = Sampling, y = mean_tdn, colour = Treatment)) +
+  geom_errorbar(aes(ymin=mean_tdn-stdev_tdn, ymax=mean_tdn +stdev_tdn), width=.2)
+
+#TDP
+nut_conc %>%
+  group_by(Sampling, Treatment) %>%
+  summarise(mean_tdp = mean(TDP), stdev_tdp = sd(TDP),
+            mean_tdn = mean(TDN), stdev_tdn = sd(TDN)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = Sampling, y = mean_tdp)) +
+  geom_line(aes(x = Sampling, y = mean_tdp, colour = Treatment)) +
+  geom_errorbar(aes(ymin=mean_tdp-stdev_tdp, ymax=mean_tdp +stdev_tdp), width=.2)
+
+# Ratio suggests P-limitation
+nut_conc %>%
+  mutate(ratio = TDN/TDP) %>%
+  group_by(Sampling, Treatment) %>%
+  summarise(mean_ratio = mean(ratio), stdev = sd(ratio)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = Sampling, y = mean_ratio)) +
+  geom_line(aes(colour = Treatment)) +
+  geom_errorbar(aes(ymin=mean_ratio-stdev, ymax=mean_ratio +stdev), width=.2)
+
+```
+
+## DOC
+```{r}
+DOC_doc <- read_tsv("../data/DOC.txt")
+
+### Pretty up and combine all nutrient and DOC graphs into one!
+DOC_doc %>%
+  group_by(Sampling, Treatment) %>%
+  summarise(mean_doc = mean(DOC), stdev_doc = sd(DOC)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = Sampling, y = mean_doc)) +
+  geom_line(aes(x = Sampling, y = mean_doc, colour = Treatment)) +
+  geom_errorbar(aes(ymin=mean_doc-stdev_doc, ymax=mean_doc +stdev_doc), width=.2)
+```
+## Combining and plotting nuts + DOC
+
+```{r}
+nut_conc %>%
+  select(-TDN) %>%
+  mutate(variable = "TDP") %>%
+  rename(value = TDP)
+
+nut_conc %>%
+  select(-TDP) %>%
+  mutate(variable = "TDN") %>%
+  rename(value = TDN)
+
+#Creating the same for DOC
+DOC_doc %>%
+  mutate(variable = "DOC")  %>%
+  rename(value = DOC) %>%
+  select(-Day_of_experiment)
+
+rbind(
+  nut_conc %>%
+  select(-TDN) %>%
+  mutate(variable = "TDP") %>%
+  rename(value = TDP),
+  nut_conc %>%
+  select(-TDP) %>%
+  mutate(variable = "TDN") %>%
+  rename(value = TDN),
+  DOC_doc %>%
+  mutate(variable = "DOC")  %>%
+  rename(value = DOC) %>%
+  select(-Day_of_experiment)
+) %>%
+  group_by(Sampling, Treatment, variable) %>%
+  summarise(mean = mean(value), stdev = sd(value)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = Sampling, y = mean)) +
+  geom_line(aes(x = Sampling, y = mean, colour = Treatment)) +
+  geom_errorbar(aes(ymin=mean-stdev, ymax=mean +stdev), width=.2, position = "dodge2") +
+  facet_wrap(~ variable, scales = "free_y") +
+  theme_minimal() +
+  scale_colour_manual(values = TREAT_COLOURS) 
+
+ggsave("../results/nutrient_plots.png")
+  
+```
+
+## Nitrospira (table of tpm for each genus)
+```{r}
+
 ```
 
 # Results
