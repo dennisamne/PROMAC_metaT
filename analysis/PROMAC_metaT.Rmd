@@ -10,7 +10,7 @@ output:
       fig_caption: yes
       code_folding: hide
 ---
-# A higher abundance of proteorhodopsin-genes in the N-treatment? Based on 16S data....
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
@@ -35,8 +35,6 @@ GEOM_COL_COLOURS = c(
 TREAT_COLOURS <- c("blue","green3","red","yellow4")
 ```
 
-
-
 ```{r files}
 #File to connect NGI ID with our own classification ID, add the µ-values to this file for testing later, or do that in a sep file?
 sample_ID <- read_tsv("../data/J.Pinhassi_21_02_sample_info.txt") %>%
@@ -60,7 +58,12 @@ eggnogs <- read_tsv("../data/eggnog_annotations.tsv.gz")
 #Reading in taxonomic annotation of reads
 taxonomy <- read_tsv("../data/eukulele_phylodb.tsv") %>%
   select(-species) %>%
-  rename(species = "genus", genus = "family", family = "order", order = "class", class = "phylum", phylum = "kingdom")
+  rename(species = "genus", genus = "family", family = "order", order = "class", class = "phylum", phylum = "kingdom")  %>%
+  mutate_all(function(x) ifelse(str_detect(x, '_X'), NA, x)) %>% #Removing _X-annotations
+  mutate_all(function(x) ifelse(str_detect(x, 'environmental'), NA, x)) %>% # Removing environmental - annotations this is considered the same as NA
+  mutate_all(function(x) ifelse(str_detect(x, 'Misc'), NA, x)) %>%
+  mutate_all(function(x) ifelse(str_detect(x, 'unclassified'), NA, x))
+  
   
 #Count file for all orfs, tpm is calculated per sample
 bbmap <- fread("../data/bbmap_counts.tsv.gz", sep = "\t") %>%
@@ -260,6 +263,11 @@ orf_mat <-  bbmap_p %>%
      ggsave("../results/PCA_hellinger_eggNOGS.png")
 ```
 
+## PERMANOVA
+```{r}
+
+```
+
 # Stacked bars for visualization of taxonomy
 ```{r}
 #Create taxonomy layout with top10 phyla, or class or order for example.
@@ -280,7 +288,7 @@ top12 <- bbmap_p %>%
 #mutate(Group = ifelse(grepl(paste(top10, collapse = "|"), family), paste0(family), "other"))
 
  #Adding one more colour to the scale
-  GEOM_COL_COLOURS1 = c(GEOM_COL_COLOURS, "#000000")
+GEOM_COL_COLOURS1 = c(GEOM_COL_COLOURS, "#D3D3D3")
   
  bbmap_p %>%
   inner_join(sample_ID, by = "sample") %>%
@@ -301,7 +309,7 @@ top12 <- bbmap_p %>%
   scale_fill_manual('phylum', values = GEOM_COL_COLOURS1) +
   ylab("Relative abundance") +
   xlab("Day") +
-  ggtitle("taxnomy of reads, phylum level") 
+  ggtitle("taxonomy of reads, phylum level") 
   ggsave("../results/taxonomy_phylum.png")
   
 
@@ -348,12 +356,13 @@ bbmap_p %>%
   summarise(tpm = mean(tpm)) %>%
   ungroup() %>%
   inner_join(taxonomy, by = "orf") %>%
-  group_by(order) %>%
+  mutate(order_coa = coalesce(order, class, phylum)) %>%
+  group_by(order_coa) %>%
   summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
   arrange(desc(tpm)) %>%
   slice(1:12) %>%
-  pull(order)
+  pull(order_coa)
  
 bbmap_p %>%
   inner_join(sample_ID, by = "sample") %>%
@@ -363,18 +372,20 @@ bbmap_p %>%
             mutate(tpm = t/sum(t)*1e6) %>%
             ungroup() %>%
   inner_join(taxonomy, by = "orf") %>%
-   mutate(Group = ifelse(order %in% top12, paste0(order), "other")) %>%
+  mutate(order_coa = coalesce(order, class, phylum)) %>%
+   mutate(Group = ifelse(order_coa %in% top12, paste0(order_coa), "Other")) %>%
   group_by(treatment, timepoint, Group) %>% #Summarising mean tpm per timepoint and treatment per group
   summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
-  ggplot(mapping = aes(x= timepoint, y = tpm, fill = fct_relevel(Group, "other", after = 10))) +
+  mutate(Group = fct_recode(Group, P_Thaumarchaeota = "Thaumarchaeota", C_Gammaproteobacteria = "Gammaproteobacteria")) %>%
+  ggplot(mapping = aes(x= timepoint, y = tpm, fill = fct_relevel(Group, "Other", after = 12))) +
   geom_col() +
   facet_wrap(~ treatment) +
   theme(axis.text.x = element_text(angle = 60), panel.background = element_blank()) +
-  scale_fill_manual('order', values = GEOM_COL_COLOURS1) +
+  scale_fill_manual('Taxonomic group', values = GEOM_COL_COLOURS1) +
   ylab("Relative abundance") +
   xlab("Day") +
-  ggtitle("Taxonomy of reads, order level") 
+  ggtitle("Taxonomy of reads, order level and up") 
   ggsave("../results/taxonomy_order.png")
 
 #Plotting again but with family
@@ -403,7 +414,7 @@ bbmap_p %>%
   group_by(treatment, timepoint, Group) %>% #Summarising mean tpm per timepoint and treatment per group
   summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
-  ggplot(mapping = aes(x= timepoint, y = tpm, fill = fct_relevel(Group, "other", after = 10))) +
+  ggplot(mapping = aes(x= timepoint, y = tpm, fill = fct_relevel(Group, "Other", after = 10))) +
   geom_col() +
   facet_wrap(~ treatment) +
   theme(axis.text.x = element_text(angle = 60), panel.background = element_blank()) +
@@ -459,32 +470,191 @@ tax_magnify <- function(taxlevel = "phylum", taxdf = taxonomy,  g = "Bacteroidet
     ggplot(mapping = aes(x = timepoint, y = tpm, fill = n_family)) +
     geom_col() +
     facet_wrap(~ treatment) +
-    scale_fill_manual(values = GEOM_COL_COLOURS, na.value = "#000000") +
+    scale_fill_manual(values = GEOM_COL_COLOURS, na.value = "#D3D3D3") +
     ggtitle(g)
 
 }
 ```
 
 ```{r bacteroidetes_chlorobi_families}
-p1 <- tax_magnify()
+#New approach by moving NA -> other, this works so keep this as opposed to previous analysis.
+top12 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(phylum == "Bacteroidetes/Chlorobi group") %>%
+  group_by(treatment,timepoint) %>%
+              mutate(t = count/Length) %>%
+              mutate(tpm = t/sum(t)*1e6) %>%
+              ungroup() %>%
+  mutate(order_coa = coalesce(family, order, class, phylum)) %>%
+  group_by(order_coa) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:12) %>%
+  pull(order_coa)
+
+#Make the expression relative within the bacteroidetes /chlorobi group
+p1 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(phylum == "Bacteroidetes/Chlorobi group") %>%
+  group_by(treatment,timepoint) %>%
+            mutate(t = count/Length) %>%
+            mutate(tpm = t/sum(t)*1e6) %>%
+            ungroup() %>%
+  mutate(order_coa = coalesce(family, order, class, phylum)) %>%
+  mutate(Group = ifelse(order_coa %in% top12, paste0(order_coa), "Other")) %>%
+  group_by(treatment, timepoint, Group) %>% #Summarising mean tpm per timepoint and treatment per group
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  #mutate(Group = fct_recode(Group, P_Thaumarchaeota = "Thaumarchaeota", C_Gammaproteobacteria = "Gammaproteobacteria")) %>%
+  ggplot(mapping = aes(x= timepoint, y = tpm, fill = fct_relevel(Group, "Other", after = 12))) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60), panel.background = element_blank()) +
+  scale_fill_manual('Taxonomic group', values = GEOM_COL_COLOURS1) +
+  ylab("Relative abundance") +
+  xlab("Day") +
+  ggtitle("Family expression bacteroidetes/Chlorobi Group") 
 ```
 
 ### Alphaproteobacteria
 The proteobacterial expression was mainly explained by Alpha, Beta- and Gammaproteobacteria, with the highest fraction of Alphaproteobacteria in the T-treatment. Gammaproteobacteria was more common in the TN-treatment. Roughly half of the  alphaproteobacterial expression was derived from Rhodobacteraceae and Surface 1-category, the latter being part of the SAR11-clade and constituted by unclassified bacteria or the genus Pelagibacter sp.. The expression composition was similar across all treatments, with the tendency of higher expression by unknown Alphaproteobacteria at day 17 in the TN treatment.
 ```{r}
-p2 <- tax_magnify(taxlevel = "class", g = "Alphaproteobacteria")
+ tax_magnify(taxlevel = "class", g = "Alphaproteobacteria")
+
+top12 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(class == "Alphaproteobacteria") %>%
+  group_by(treatment,timepoint) %>%
+              mutate(t = count/Length) %>%
+              mutate(tpm = t/sum(t)*1e6) %>%
+              ungroup() %>%
+  mutate(order_coa = coalesce(family, order, class, phylum)) %>%
+  group_by(order_coa) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:12) %>%
+  pull(order_coa)
+
+#Make the expression relative within the bacteroidetes /chlorobi group
+p2 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(class == "Alphaproteobacteria") %>%
+  group_by(treatment,timepoint) %>%
+            mutate(t = count/Length) %>%
+            mutate(tpm = t/sum(t)*1e6) %>%
+            ungroup() %>%
+  mutate(order_coa = coalesce(family, order, class, phylum)) %>%
+  mutate(Group = ifelse(order_coa %in% top12, paste0(order_coa), "Other")) %>%
+  group_by(treatment, timepoint, Group) %>% #Summarising mean tpm per timepoint and treatment per group
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  #mutate(Group = fct_recode(Group, P_Thaumarchaeota = "Thaumarchaeota", C_Gammaproteobacteria = "Gammaproteobacteria")) %>%
+  ggplot(mapping = aes(x= timepoint, y = tpm, fill = fct_relevel(Group, "Other", after = 12))) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60), panel.background = element_blank()) +
+  scale_fill_manual('Taxonomic group', values = GEOM_COL_COLOURS1) +
+  ylab("Relative abundance") +
+  xlab("Day") +
+  ggtitle("Family expression Alphaproteobacteria") 
 ```
 
 ### Gammaproteobacteria
 In Gammaproteobacteria, expression composition was markedly different in the N-treatment as more than 25% of expression was explained by *Shewanellaceae* at both timepoints. In the TN-treatment Oceanospirillaceae was instead the most prominent during day 10 while expression was more even during day 17. The C-treatment showed the most diverse expression composition with the larger groups comprising Environmental Gammaproteobacteria and NA. 
 ```{r}
-p3 <- tax_magnify(taxlevel = "class", g = "Gammaproteobacteria")
+tax_magnify(taxlevel = "class", g = "Gammaproteobacteria")
+
+top12 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(class == "Gammaproteobacteria") %>%
+  group_by(treatment,timepoint) %>%
+              mutate(t = count/Length) %>%
+              mutate(tpm = t/sum(t)*1e6) %>%
+              ungroup() %>%
+  mutate(order_coa = coalesce(family, order, class, phylum)) %>%
+  group_by(order_coa) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:12) %>%
+  pull(order_coa)
+
+#Make the expression relative within the bacteroidetes /chlorobi group
+p3 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(class == "Gammaproteobacteria") %>%
+  group_by(treatment,timepoint) %>%
+            mutate(t = count/Length) %>%
+            mutate(tpm = t/sum(t)*1e6) %>%
+            ungroup() %>%
+  mutate(order_coa = coalesce(family, order, class, phylum)) %>%
+  mutate(Group = ifelse(order_coa %in% top12, paste0(order_coa), "Other")) %>%
+  group_by(treatment, timepoint, Group) %>% #Summarising mean tpm per timepoint and treatment per group
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  #mutate(Group = fct_recode(Group, P_Thaumarchaeota = "Thaumarchaeota", C_Gammaproteobacteria = "Gammaproteobacteria")) %>%
+  ggplot(mapping = aes(x= timepoint, y = tpm, fill = fct_relevel(Group, "Other", after = 12))) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60), panel.background = element_blank()) +
+  scale_fill_manual('Taxonomic group', values = GEOM_COL_COLOURS1) +
+  ylab("Relative abundance") +
+  xlab("Day") +
+  ggtitle("Family expression Gammaproteobacteria") 
 ```
 
 ### Thaumarchaeota
 The expression was represented mainly by undetermined thaumarchaeota families, of which the Genus *Nitrosopumilus sp.* was a member, a small fraction was attributed to the Cenarchaeaceae family.
 ```{r}
-p4 <- tax_magnify(taxlevel = "phylum", g = "Thaumarchaeota")
+ tax_magnify(taxlevel = "phylum", g = "Thaumarchaeota")
+
+top12 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(phylum == "Thaumarchaeota") %>%
+  group_by(treatment,timepoint) %>%
+              mutate(t = count/Length) %>%
+              mutate(tpm = t/sum(t)*1e6) %>%
+              ungroup() %>%
+  mutate(order_coa = coalesce(genus, family, order, class, phylum)) %>%
+  group_by(order_coa) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:12) %>%
+  pull(order_coa)
+
+#Make the expression relative within the bacteroidetes /chlorobi group
+p4 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(phylum == "Thaumarchaeota") %>%
+  group_by(treatment,timepoint) %>%
+            mutate(t = count/Length) %>%
+            mutate(tpm = t/sum(t)*1e6) %>%
+            ungroup() %>%
+  mutate(order_coa = coalesce(genus, family, order, class, phylum)) %>%
+  mutate(Group = ifelse(order_coa %in% top12, paste0(order_coa), "Other")) %>%
+  group_by(treatment, timepoint, Group) %>% #Summarising mean tpm per timepoint and treatment per group
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  #mutate(Group = fct_recode(Group, P_Thaumarchaeota = "Thaumarchaeota", C_Gammaproteobacteria = "Gammaproteobacteria")) %>%
+  ggplot(mapping = aes(x= timepoint, y = tpm, fill = fct_relevel(Group, "Other", after = 12))) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60), panel.background = element_blank()) +
+  scale_fill_manual('Taxonomic group', values = GEOM_COL_COLOURS1) +
+  ylab("Relative abundance") +
+  xlab("Day") +
+  ggtitle("Family expression Thaumarchaeota") 
 ```
 
 ## Plotting all the family plots together
