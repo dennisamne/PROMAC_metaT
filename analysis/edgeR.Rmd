@@ -2,20 +2,27 @@
 title: "edgeR"
 author: "Dennis Amnebrink"
 date: "7/27/2022"
-output: html_document
+output:
+  html_document:
+      toc: yes
+      toc_float:
+        collapse: no
+      fig_caption: yes
+      code_folding: hide
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 library(tidyverse)
 library(edgeR)
 library(data.table)
+library(viridis)
 ```
 
-```{r file-loading}
+```{r file-loading, message=FALSE, warning=FALSE, cache=TRUE}
 #File to connect NGI ID with our own classification ID, add the µ-values to this file for testing later, or do that in a sep file?
 sample_ID <- read_tsv("../data/J.Pinhassi_21_02_sample_info.txt") %>%
   dplyr::select(1:2) %>%
@@ -50,7 +57,7 @@ bbmap <- fread("../data/bbmap_counts.tsv.gz", sep = "\t") %>%
               dplyr::select(orf,Start,End,Strand,Length,sample,count,tpm) 
 ```
 
-```{r constants}
+```{r constants, message=FALSE, warning=FALSE}
 SIGNIFICANCE = 0.05
 DIFF_TRESHOLD = 2.5
 ```
@@ -60,7 +67,7 @@ GEOM_COL_COLOURS = c(
   RColorBrewer::brewer.pal(12, name = 'Paired'))
 ```
 
-```{r prok-filter}
+```{r prok-filter, message=FALSE, warning=FALSE, cache=TRUE}
 #Removing non-prokreads as well as recalculating tpm over prok frac.
 bbmap_p <- bbmap %>% 
   semi_join(taxonomy %>% filter(domain %in% c("Bacteria", "Archaea")), 
@@ -72,20 +79,30 @@ bbmap_p <- bbmap %>%
    ungroup()
 ```
 
-```{r EdgeR}
-#EdgeR-analysis, orfs on rows and samples as colnames
-bbmap_mat <- bbmap_p %>%
-  dplyr::select(orf, sample, count) %>%
+# EdgeR-analysis day 10 
+```{r edgeR_setup, message=FALSE, warning=FALSE}
+# Do T vs C only day 10 (T3)
+ bbmap_mat <- bbmap_p %>% 
+  dplyr::select(-t, -tpm) %>%
+  inner_join(eggnogs %>% distinct(orf, KEGG_ko), by = "orf") %>%
+  filter(KEGG_ko != "-") %>%
+  separate_rows(KEGG_ko, sep = ",") %>%
+  group_by(sample, KEGG_ko) %>%
+  summarise(count = sum(count)) %>%
+  ungroup() %>%
+  inner_join(sample_ID, by = "sample") %>%
+  filter(day == "10") %>% #Removing day 10
+  select(sample, KEGG_ko, count) %>%
   spread(sample, count, fill = 0) %>%
-  column_to_rownames("orf") %>%
+  column_to_rownames("KEGG_ko") %>%
   as.matrix()
-
+ 
 library(edgeR)
 
 y <- DGEList(bbmap_mat)
 
 #Changing the grouping to the known treatments from mesocosm.
-y$samples$group = sample_ID %>% select(sample, treatment) %>% .$treatment
+y$samples$group = sample_ID %>% filter(day == "10") %>% select(sample, treatment) %>%  pull(treatment)
 
 #It has been correctly done as they match with the original sample file
 groupF <- y$samples$group
@@ -104,9 +121,9 @@ y <- calcNormFactors(y)
 y$samples
 
 #The design-matrix doesn't like non-numeric categories, so here is a numeric corresponding to orignal levels, key =
-# 1 = T, 2 = C, 3 = N, 4 = NT
+# 1 = T, 2 = C, 3 = N, 4 = TN
 design_m <- y$samples %>% select(group) %>%
-  mutate(group = c(1,1,1,2,2,2,3,3,3,4,4,4,1,1,1,2,2,2,3,3,3,4,4,4))
+  mutate(group = c(1,1,1,2,2,2,3,3,3,4,4,4))
 
 y <- estimateDisp(y, design = design_m)
 
@@ -119,14 +136,52 @@ fit <- glmQLFit(y, trial_mat)
 
 fit
 
-#Comparing C vs NT
-colnames(trial_mat) = c("C","N","NT","T")
+#Comparing C vs T
+colnames(trial_mat) = c("C","N","TN","t")
 
 fit <- glmQLFit(y, trial_mat)
 
-CvsNT <- makeContrasts(C-NT, levels=trial_mat)
+TvsC <- makeContrasts(t - C, levels=trial_mat)
+NvsC <- makeContrasts(N - C, levels=trial_mat)
+TNvsT <- makeContrasts(TN - t, levels=trial_mat)
+```
 
-qlf <- glmQLFTest(fit, contrast=CvsNT)
+```{r CvsT, message=FALSE, warning=FALSE}
+qlf <- glmQLFTest(fit, contrast=TvsC)
+
+#Most changing genes
+topTags(qlf)
+
+#Summary of genes up/downregulated, upregulated in this case refes to upregulated in C-treatment, negative is upregulated in TN-treatment.
+
+summary(decideTests(qlf))
+# Blue lines indicate 2-fold changes
+
+pdf("../results/edgeRTNvsC2logFC.pdf")
+plotMD(qlf)
+abline(h=c(-1, 1), col="blue")
+dev.off()
+
+#Trying to look at the fold changes the edgeR way
+tr <- glmTreat(fit, contrast=TvsC, lfc=log2(DIFF_TRESHOLD))
+
+#The summary lets us know there are 1015 genes upregulated in  the C-treatment, and 4045 upregulated in  the TN treatment at a 2.5 logFC value.
+diff_expr_sum <- summary(decideTestsDGE(tr)) %>% as.data.frame()
+
+write_tsv(diff_expr_sum, "../results/edgeR_gene_partitioningCvsT.tsv")
+
+TvsC <- tr$table %>%
+  rownames_to_column("KEGG_ko")
+
+#Doing the same but setting treshold to 2.5 logFC
+pdf("../results/edgeRTvsC2logFC2.5.pdf")
+plotMD(tr)
+abline(h=c(-DIFF_TRESHOLD, DIFF_TRESHOLD), col="blue")
+dev.off()
+```
+
+```{r NvsC, message=FALSE, warning=FALSE}
+qlf <- glmQLFTest(fit, contrast=NvsC)
 
 #Most changing genes
 topTags(qlf)
@@ -136,22 +191,163 @@ topTags(qlf)
 summary(decideTests(qlf))
 # Blue lines indicate 2-fold changes
 
-pdf("../results/edgeRCvsTN2logFC.pdf")
+pdf("../results/edgeRCvsN2logFC.pdf")
 plotMD(qlf)
 abline(h=c(-1, 1), col="blue")
 dev.off()
 
 #Trying to look at the fold changes the edgeR way
-tr <- glmTreat(fit, contrast=CvsNT, lfc=log2(DIFF_TRESHOLD))
+tr <- glmTreat(fit, contrast=NvsC, lfc=log2(DIFF_TRESHOLD))
+
+CvsN <- tr$table %>%
+  rownames_to_column("KEGG_ko")
+```
+
+```{r TvsTN, message=FALSE, warning=FALSE}
+qlf <- glmQLFTest(fit, contrast=TNvsT)
+
+#Most changing genes
+topTags(qlf)
+
+#Summaroy of genes up/downregulated, upregulated in this case refes to upregulated in C-treatment, negative is upregulated in TN-treatment.
+
+summary(decideTests(qlf))
+# Blue lines indicate 2-fold changes
+
+pdf("../results/edgeRTvsNT2logFC.pdf")
+plotMD(qlf)
+abline(h=c(-1, 1), col="blue")
+dev.off()
+
+#Trying to look at the fold changes the edgeR way
+tr <- glmTreat(fit, contrast=TNvsT, lfc=log2(DIFF_TRESHOLD))
+
+TvsTN <- tr$table %>%
+  rownames_to_column("KEGG_ko")
+```
+
+```{r message=FALSE, warning=FALSE}
+#Combiningputput df's and performing fdr correction
+TvsC %>%
+  as.data.frame() %>%
+  mutate(contrast = "CvsT") %>%
+  bind_rows(CvsN %>% mutate(contrast = "CsvN")) %>%
+  bind_rows(TvsTN %>% mutate(contrast = "TvsTN")) %>%
+  mutate(fdr = p.adjust(PValue, method = "fdr")) %>%
+  mutate(type = 
+           case_when(
+             (fdr <= SIGNIFICANCE & logFC >= DIFF_TRESHOLD) ~ "Up",
+             (fdr <= SIGNIFICANCE & logFC <= -DIFF_TRESHOLD) ~ "Down",
+             TRUE ~"non-DE"
+           )) %>%
+  mutate(type = forcats::as_factor(type) %>% fct_relevel("Up","non-DE","Down")) %>%
+  write_tsv("../results/edgeR_contrasts.tsv")
+```
+
+## Inspecting contrasts
+```{r CvsT_KO, message=FALSE, warning=FALSE}
+contrasts <- read_tsv("../results/edgeR_contrasts.tsv")
+
+mat <- contrasts %>%
+  filter(contrast == "CvsT") %>%
+  filter(fdr <= SIGNIFICANCE) %>%
+  arrange(desc(logFC)) %>%
+  mutate(KEGG_ko = factor(KEGG_ko) %>% forcats::fct_reorder(logFC, .desc = TRUE)) %>%
+  select(KEGG_ko, logFC) %>%
+  spread(KEGG_ko, logFC, fill = 0) %>%
+  as.matrix() 
+ 
+ 
+ #use geom rug to add the colourstrip on the X axis
+bbmap_plot <- bbmap_p %>% 
+  dplyr::select(-t, -tpm) %>%
+  inner_join(eggnogs %>% distinct(orf, KEGG_ko), by = "orf") %>%
+  filter(KEGG_ko != "-") %>%
+  separate_rows(KEGG_ko, sep = ",") %>%
+  group_by(sample, KEGG_ko) %>%
+  summarise(count = sum(count)) %>%
+  ungroup() %>%
+  inner_join(sample_ID, by = "sample") %>%
+  filter(day == "10") %>%#Removing day 10 
+  filter(treatment %in% c("C","T")) %>%
+  group_by(treatment, KEGG_ko) %>%
+  summarise(mean = mean(count), stdev = sd(count)) %>%
+  ungroup() %>%
+  inner_join(contrasts %>%
+    filter(contrast == "CvsT") %>%
+    filter(fdr <= SIGNIFICANCE) %>%
+    arrange(desc(logFC)) %>%
+    select(KEGG_ko, logFC), by = "KEGG_ko") %>%
+  mutate(KEGG_ko = factor(KEGG_ko) %>% forcats::fct_reorder(logFC, .desc = TRUE)) 
+  
+bbmap_plot %>% 
+  filter(mean <= 80000) %>%
+  #filter(logFC>= 4 | logFC <= -4) %>%
+ ggplot(mapping = aes(x = KEGG_ko, y = log(mean))) +
+  geom_col( aes(fill = treatment)) +
+  geom_rug(aes(colour = logFC), sides = "b") +
+  scale_colour_viridis(discrete = FALSE) +
+  theme(axis.text.x = element_blank()) +
+  facet_wrap(~treatment)
+  ggsave("../results/CvsT_KO_logFC.png")
+```
+
+## Verifying that genes are up in T when they are "down" - use this and put a heatmap of logFC underneath and order the genes based on logFC for a cool visualization
+```{r TvsC_KO_plot, message=FALSE, warning=FALSE, fig.cap = "Differentially expressed genes C vs T"}
+
+ DE_genes <- contrasts %>%
+   filter(contrast == "TvsC") %>%
+   filter(type %in% c("Up","Down"))
+
+bbmap_p %>% 
+  dplyr::select(-t, -tpm) %>%
+  inner_join(eggnogs %>% distinct(orf, KEGG_ko), by = "orf") %>%
+  filter(KEGG_ko != "-") %>%
+  separate_rows(KEGG_ko, sep = ",") %>%
+  group_by(sample, KEGG_ko) %>%
+  summarise(count = sum(count)) %>%
+  ungroup() %>%
+  inner_join(sample_ID, by = "sample") %>%
+  filter(day == "10") %>% #Removing day 10
+  select(sample, KEGG_ko, count, treatment) %>%
+  filter(treatment %in% c("C","T")) %>%
+  mutate(KEGG_ko = gsub("ko:","", KEGG_ko)) %>%
+  semi_join(DE_genes %>% filter(type == "Down"), by = "KEGG_ko") %>%
+  group_by(treatment, KEGG_ko) %>%
+  summarise(count= mean(count)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = KEGG_ko, y = count, fill = treatment)) +
+  geom_col()
+```
+
+## NvsC
+```{r NvsC_KO, message=FALSE, warning=FALSE, eval=FALSE}
+qlf <- glmQLFTest(fit, contrast=CvsN)
+
+#Most changing genes
+topTags(qlf)
+
+#Summaroy of genes up/downregulated, upregulated in this case refes to upregulated in C-treatment, negative is upregulated in TN-treatment.
+
+summary(decideTests(qlf))
+# Blue lines indicate 2-fold changes
+
+pdf("../results/edgeRNvsC2logFC.pdf")
+plotMD(qlf)
+abline(h=c(-1, 1), col="blue")
+dev.off()
+
+#Trying to look at the fold changes the edgeR way
+tr <- glmTreat(fit, contrast=NvsC, lfc=log2(DIFF_TRESHOLD))
 
 #The summary lets us know there are 1015 genes upregulated in  the C-treatment, and 4045 upregulated in  the TN treatment at a 2.5 logFC value.
 diff_expr_sum <- summary(decideTestsDGE(tr)) %>% as.data.frame()
 
-write_tsv(diff_expr_sum, "../results/edgeR_gene_partitioning.tsv")
+write_tsv(diff_expr_sum, "../results/edgeR_gene_partitioningNvsC.tsv")
 
 #Does the fdr correction apply to the summary?
 obj <- tr$table %>%
-  mutate(fdr = p.adjust(PValue, method = "fdr")) %>%
+  #mutate(fdr = p.adjust(PValue, method = "fdr")) %>%
   mutate(type = 
            case_when(
              (fdr <= SIGNIFICANCE & logFC >= DIFF_TRESHOLD) ~ "Up",
@@ -163,343 +359,62 @@ obj <- tr$table %>%
   tally() %>%
   ungroup() # a few genes are missing using this approach, in the significant fractions, but are not in the non-DE?? The total genes still add up using the summary(decideTests(tr)), on the original edgeR-object...
 
+CvsN <- tr$table %>%
+  rownames_to_column("KEGG_ko")
+
 #Doing the same but setting treshold to 2.5 logFC
-pdf("../results/edgeRCvsTN2logFC2.5.pdf")
+pdf("../results/edgeRNvsC2logFC2.5.pdf")
 plotMD(tr)
 abline(h=c(-DIFF_TRESHOLD, DIFF_TRESHOLD), col="blue")
 dev.off()
-
-#Looking at the most abundantly differentially expressed genes
-
-
-# Quick looks shows proteases, ribosomal proteins and chaperones again, but where are they higher expressed, compared to C-treatment?
-#bbmap_p %>% filter(orf %in% c(rownames(topTags(qlf)))) %>%
-  #inner_join(eggnogs, by = "orf") %>%
-  #select(sample, count, Preferred_name, best_og_desc) %>% view()
 ```
 
-## Investigating the logFC genes in the C-treatment
-```{r}
-DEGs <- tr$table %>%
-  filter(logFC >= DIFF_TRESHOLD) %>%
-  mutate(fdr = p.adjust(PValue, method = "fdr")) %>% 
-  rownames_to_column("orf") %>%
-  filter(fdr <= SIGNIFICANCE) %>% #Join in annotation
-  left_join(eggnogs %>% select(orf, Preferred_name, best_og_desc), by = "orf")
+```{r fdr_correction, message=FALSE, warning=FALSE, eval=FALSE}
 
-write_tsv(DEGs, "../results/DEG.tsv")
-
-#Getting the Geneid's for subsetting
-C_enrich <- DEGs %>%
-  filter(logFC >= DIFF_TRESHOLD) %>%
-  filter(fdr <= SIGNIFICANCE) %>%
-  pull(orf)
-
-plot_df <- bbmap_p %>%
-  inner_join(sample_ID, by = "sample") %>%
-  group_by(timepoint, treatment, orf) %>%
-  summarise(count = mean(count)) %>%
-  ungroup() %>%
-  inner_join(bbmap_p %>% distinct(orf, Length), by = "orf") %>%
-  group_by(timepoint, treatment) %>% #Mutating tpm per timepoint and treatment
-  mutate(t = count/Length) %>%
-  mutate(tpm = t/sum(t)*1e6) %>%
-  ungroup() %>%
-  dplyr::select(-t) %>%
-  dplyr::filter(orf %in% C_enrich)
-
-#Seems to work very well! Judging from this temperature seems to be the larger difference.
-plot_df %>%
-  filter(orf %in% C_enrich[1:10]) %>%
-  ggplot(mapping = aes(x = treatment, y = tpm, group = orf, fill = orf)) +
-  geom_col() +
-  scale_fill_manual(values = GEOM_COL_COLOURS)
-```
-# Fisher's test of overrepresentation, modules
-
-## C-treatment modules
-```{r fisherC_test}
-DEGs <- tr$table %>%
-  mutate(fdr = p.adjust(PValue, method = "fdr")) %>% 
-  rownames_to_column("orf") %>%
-  filter(fdr <= SIGNIFICANCE) %>% #Join in annotation
-  left_join(eggnogs %>% select(orf, Preferred_name, best_og_desc), by = "orf")
-
-#Getting the Geneid's for subsetting
-C_enrich <- DEGs %>%
-  filter(logFC >= DIFF_TRESHOLD) %>%
-  pull(orf)
-
-
-#Subset the gene universe to only the two compared treatments, that is C and TN
-
-#Unique kegg modules for the genes enriched
-unique_kegg_module <- bbmap_p %>%
-  inner_join(sample_ID, by = "sample") %>%
-  filter(treatment %in% c("C","TN")) %>%
-  distinct(orf) %>%
-  inner_join(eggnogs, by = "orf") %>%
-  distinct(orf, KEGG_Module) %>% 
-  filter(!is.na(KEGG_Module)) %>%
-  filter(KEGG_Module != "-") %>%
-  separate_rows(KEGG_Module, sep = ",") %>%
-  distinct(KEGG_Module) %>%
-  pull(KEGG_Module)
-
-fisher_result = list()
-
-matr = matrix(ncol = 5, nrow = 1)
-rownames(matr) = c("up") # groups
-colnames(matr) = c("#genes in group", "#pval<0.05 modules", "pval<0.05 modules", "#qval<0.05 modules", "qval<0.05 modules")
-
-up_kegg_modules <- bbmap_p %>%
-  inner_join(sample_ID, by = "sample") %>%
-  filter(treatment %in% c("C","TN")) %>%
-  distinct(orf) %>%
-  inner_join(eggnogs, by = "orf") %>% 
-  filter(orf %in% C_enrich) %>%
-  separate_rows(KEGG_Module, sep = ",") %>% 
-  filter(KEGG_Module != "-") %>%
-  pull(KEGG_Module)
-
-other_kegg_modules <- bbmap_p %>%
-  inner_join(sample_ID, by = "sample") %>%
-  filter(treatment %in% c("C","TN")) %>%
-  distinct(orf) %>%
-  inner_join(eggnogs, by = "orf")%>% 
-  dplyr::filter(!orf %in% C_enrich) %>%
-  dplyr::filter(KEGG_Module != "-") %>%
-  separate_rows(KEGG_Module, sep = ",") %>% 
-  pull(KEGG_Module)
-
-pval = rep(NA, length(unique_kegg_module))
-for (k in 1:length(unique_kegg_module)) {  
-    test_matr = matrix(ncol = 2, nrow = 2)
-    colnames(test_matr) = c("up_clust", "nonDE_clust") # ie belongs to cluster / do not belong to cluster
-    rownames(test_matr) = c("in_module", "out_module") # ie belongs to module / do not belong to module
-    test_matr[1,1] = length(which(up_kegg_modules == unique_kegg_module[k]))
-    test_matr[1,2] = length(which(other_kegg_modules == unique_kegg_module[k]))
-    test_matr[2,1] = length(up_kegg_modules) - length(which(up_kegg_modules == unique_kegg_module[k]))
-    test_matr[2,2] = length(other_kegg_modules) - length(which(other_kegg_modules == unique_kegg_module[k]))
-    pval[k] = fisher.test(test_matr, alternative = "greater")$p.value # p.value for that module k is enriched in cluster j
-}
-qval = p.adjust(pval, method = "fdr")
-matr[1,1] = length(up_kegg_modules)
-matr[1,2] = length(which(pval <= SIGNIFICANCE))
-matr[1,3] = sort(paste(unique_kegg_module[which(pval <= SIGNIFICANCE)], collapse = ","))
-matr[1,4] = length(which(qval <= SIGNIFICANCE))
-matr[1,5] = sort(paste(unique_kegg_module[which(qval <= SIGNIFICANCE)], collapse = ","))
 ```
 
-```{r C_categories}
-#Elucidating the modules that were over-represented in among genes upregulated in the C-treatment.
-matr %>%
-  as.data.frame() %>%
-  write_tsv(.,"../data/enrichment_modules_C.tsv")
-
-CEnrich <- read_tsv("../data/enrichment_modules_C.tsv")
-
-enriched <- CEnrich[1,5] 
-
-CEnrich <-  str_split(enriched, ",") %>%
-  .[[1]]
-```
-
-## TN treatment modules
-```{r fisherTN_test}
-TN_enrich <- DEGs %>%
-  filter(logFC <= -DIFF_TRESHOLD) %>%
-  pull(orf)
-
-#Unique kegg modules for the entire comparison
-unique_kegg_module <-  bbmap_p %>%
-  inner_join(sample_ID, by = "sample") %>%
-  filter(treatment %in% c("C","TN")) %>%
-  distinct(orf) %>%
-  inner_join(eggnogs, by = "orf") %>%
-  distinct(orf, KEGG_Module) %>% 
-  filter(!is.na(KEGG_Module)) %>%
-  filter(KEGG_Module != "-") %>%
-  separate_rows(KEGG_Module, sep = ",") %>%
-  distinct(KEGG_Module) %>%
-  pull(KEGG_Module)
-
-fisher_result = list()
-
-matr = matrix(ncol = 5, nrow = 1)
-rownames(matr) = c("up") # groups
-colnames(matr) = c("#genes in group", "#pval<0.05 modules", "pval<0.05 modules", "#qval<0.05 modules", "qval<0.05 modules")
-
-down_kegg_modules <-  bbmap_p %>%
-  inner_join(sample_ID, by = "sample") %>%
-  filter(treatment %in% c("C","TN")) %>%
-  distinct(orf) %>%
-  inner_join(eggnogs, by = "orf") %>% 
-  filter(orf %in% TN_enrich) %>%
-  separate_rows(KEGG_Module, sep = ",") %>% 
-  filter(KEGG_Module != "-") %>%
-  pull(KEGG_Module)
-
-other_kegg_modules <-  bbmap_p %>%
-  inner_join(sample_ID, by = "sample") %>%
-  filter(treatment %in% c("C","TN")) %>%
-  distinct(orf) %>%
-  inner_join(eggnogs, by = "orf") %>% 
-  dplyr::filter(!orf %in% TN_enrich) %>%
-  dplyr::filter(KEGG_Module != "-") %>%
-  separate_rows(KEGG_Module, sep = ",") %>% 
-  pull(KEGG_Module)
-
-pval = rep(NA, length(unique_kegg_module))
-for (k in 1:length(unique_kegg_module)) {  
-    test_matr = matrix(ncol = 2, nrow = 2)
-    colnames(test_matr) = c("down_clust", "nonDE_clust") # ie belongs to cluster / do not belong to cluster
-    rownames(test_matr) = c("in_module", "out_module") # ie belongs to module / do not belong to module
-    test_matr[1,1] = length(which(down_kegg_modules == unique_kegg_module[k]))
-    test_matr[1,2] = length(which(other_kegg_modules == unique_kegg_module[k]))
-    test_matr[2,1] = length(down_kegg_modules) - length(which(down_kegg_modules == unique_kegg_module[k]))
-    test_matr[2,2] = length(other_kegg_modules) - length(which(other_kegg_modules == unique_kegg_module[k]))
-    pval[k] = fisher.test(test_matr, alternative = "greater")$p.value # p.value for that module k is enriched in cluster j
-}
-qval = p.adjust(pval, method = "fdr")
-matr[1,1] = length(down_kegg_modules)
-matr[1,2] = length(which(pval <= SIGNIFICANCE))
-matr[1,3] = sort(paste(unique_kegg_module[which(pval <= SIGNIFICANCE)], collapse = ","))
-matr[1,4] = length(which(qval <= SIGNIFICANCE))
-matr[1,5] = sort(paste(unique_kegg_module[which(qval <= SIGNIFICANCE)], collapse = ","))
-```
-
-```{r TN_categories}
-
-matr %>%
-  as.data.frame() %>%
-  write_tsv(.,"../data/enrichment_modules_TN.tsv")
-
-TNenriched <- read_tsv("../data/enrichment_modules_TN.tsv")
-
-TNenriched <- TNenriched[1,5] 
-
-TNEnriched <- str_split(TNenriched,",") %>%
-  .[[1]]
-```
-
-## Plotting the overrepresented genes
-```{r edgeR_plot}
-
-#Setting colours
-colours <- c("#ff0000","#000000","#4248f5")
-
-tr$table %>%
-  mutate(fdr = p.adjust(PValue, method = "fdr")) %>%
-  mutate(type = 
-           case_when(
-             (fdr <= SIGNIFICANCE & logFC >= DIFF_TRESHOLD) ~ "Up",
-             (fdr <= SIGNIFICANCE & logFC <= -DIFF_TRESHOLD) ~ "Down",
-             TRUE ~"non-DE"
-           )) %>%
-  mutate(type = forcats::as_factor(type) %>% fct_relevel("Up","non-DE","Down")) %>%
-  ggplot(mapping = aes(x = logCPM, y = logFC)) +
-  geom_point(aes(colour = type, size = type)) +
-  scale_color_manual("Type",values = colours) +
-  scale_size_manual(values = c("Up" = 1.5, "non-DE" = 0.2, "Down" = 1.5), guide = "none") +
-  geom_hline(yintercept = DIFF_TRESHOLD, colour = "green", linetype = "dashed") +
-  geom_hline(yintercept = -DIFF_TRESHOLD, colour = "green", linetype = "dashed") +
-  theme_classic() +
-  theme(panel.grid = element_blank(), legend.position = "bottom", axis.line = element_line()) +
-  annotate("label", x = 11, y = 12, label = CEnrich[1], size = 3, colour = "#ff0000") +
-  annotate("label", x = 12.5, y = 12, label = CEnrich[2], size = 3,colour = "#ff0000") +
-  annotate("label", x = 14, y = 12, label = CEnrich[3], size = 3, colour = "#ff0000") +
-  #annotate("label", x = 11, y = 10, label = CEnrich[4], size = 3) +
-  #annotate("label", x = 12.5, y = 10, label = CEnrich[5], size = 3) +
-  #annotate("label", x = 14, y = 10, label = CEnrich[6], size = 3) +
-  annotate("label", x = 11, y = -10, label = TNEnriched[1], size = 3, colour = "#4248f5") +
-  annotate("label", x = 12.5, y = -10, label = TNEnriched[2], size = 3, colour = "#4248f5") +
-  annotate("label", x = 14, y = -10, label = TNEnriched[3], size = 3, colour = "#4248f5") +
-  #annotate("label", x = 11, y = -12, label = TNEnriched[4], size = 3) +
-  #annotate("label", x = 12.5, y = -12, label = TNEnriched[5], size = 3) +
-  #annotate("label", x = 14, y = -12, label = TNEnriched[6], size = 3) +
-  #annotate("label", x = 14, y = -8, label = TNEnriched[7], size = 3) +
-  scale_y_continuous(breaks=seq(-10,10,5)) +
-  scale_x_continuous(breaks=seq(0,14,2)) 
-
-ggsave("../results/edgeRCvsNT_anno_ggplot.png")
-ggsave("../results/edgeRCvsNT_anno_ggplot.pdf")
-```
-
-#Other unused stuff
-```{r Fisher_pathway eval=FALSE}
-
-##  Fishers' test Pathway level
-#Trying to do an overview of the overrepresented categories as compared to the rest of the genes.
-kegg_pathway = eggnogs %>% distinct(orf, KEGG_Pathway) %>% filter(!is.na(KEGG_Pathway))
-
-#Unique kegg modules for the genes enriched
-unique_kegg_pathway <- eggnogs %>%
-  filter(orf %in% C_enrich) %>%
-  distinct(orf, KEGG_Pathway) %>% 
-  filter(!is.na(KEGG_Pathway)) %>%
-  filter(KEGG_Pathway != "-") %>%
+## Creating a key with pathway and KO-term
+```{r message=FALSE, warning=FALSE, eval =FALSE}
+# Removing some common ones
+  #01100 - Metabolic Pathways
+ko_path_list <- eggnogs %>%
+  distinct(KEGG_ko, KEGG_Pathway) %>%
+  separate_rows(KEGG_ko, sep = ",") %>%
+  filter(KEGG_ko != "-") %>%
+  mutate(KEGG_Pathway = gsub("map|ko","", KEGG_Pathway)) %>%
+  mutate(KEGG_ko = gsub("ko:","",KEGG_ko)) %>%
   separate_rows(KEGG_Pathway, sep = ",") %>%
-  distinct(KEGG_Pathway) %>%
-  pull(KEGG_Pathway)
-
-fisher_result = list()
-
-matr = matrix(ncol = 5, nrow = 1)
-rownames(matr) = c("up") # groups
-colnames(matr) = c("#genes in group", "#pval<0.05 pathways", "pval<0.05 pathways", "#qval<0.05 pathways", "qval<0.05 pathways")
-
-up_kegg_pathways <- eggnogs %>% 
-  filter(orf %in% C_enrich) %>%
-  separate_rows(KEGG_Pathway, sep = ",") %>% 
-  filter(KEGG_Pathway != "-") %>%
-  pull(KEGG_Pathway)
-
-other_kegg_pathways <- eggnogs %>% 
-  dplyr::filter(!orf %in% C_enrich) %>%
-  dplyr::filter(KEGG_Pathway != "-") %>%
-  separate_rows(KEGG_Pathway, sep = ",") %>% 
-  pull(KEGG_Pathway)
-
-pval = rep(NA, length(unique_kegg_pathway))
-for (k in 1:length(unique_kegg_pathway)) {  
-    test_matr = matrix(ncol = 2, nrow = 2)
-    colnames(test_matr) = c("up_clust", "nonDE_clust") # ie belongs to group of interest / do not belong to group of interest
-    rownames(test_matr) = c("in_pathway", "out_pathway") # ie belongs to module / do not belong to module
-    test_matr[1,1] = length(which(up_kegg_pathways == unique_kegg_pathway[k]))
-    test_matr[1,2] = length(which(other_kegg_pathways == unique_kegg_pathway[k]))
-    test_matr[2,1] = length(up_kegg_pathways) - length(which(up_kegg_pathways == unique_kegg_pathway[k]))
-    test_matr[2,2] = length(other_kegg_pathways) - length(which(other_kegg_pathways == unique_kegg_pathway[k]))
-    pval[k] = fisher.test(test_matr, alternative = "greater")$p.value # p.value for that module k is enriched in cluster j
-}
-qval = p.adjust(pval, method = "fdr")
-matr[1,1] = length(up_kegg_pathways)
-matr[1,2] = length(which(pval < 0.05))
-matr[1,3] = sort(paste(unique_kegg_pathway[which(pval < 0.05)], collapse = ","))
-matr[1,4] = length(which(qval < 0.05))
-matr[1,5] = sort(paste(unique_kegg_pathway[which(qval < 0.05)], collapse = ","))
+  distinct(KEGG_ko, KEGG_Pathway) %>%
+  filter(!KEGG_Pathway %in% c("01100","01120")) 
 ```
 
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+#removing pathways with only one obs
+obs_in_path <- DE_genes %>%
+  inner_join(ko_path_list, by = "KEGG_ko") %>%
+  filter(type == "Down") %>%
+  group_by(KEGG_Pathway) %>%
+  tally() %>%
+  ungroup() %>%
+  filter(n >2)
 
-```{r Rm_edgeR eval=FALSE}
+#Copmbining the stupid fuucking list to try and do something 
+DE_genes %>%
+  inner_join(ko_path_list, by = "KEGG_ko") %>%
+  filter(type == "Down") %>%
+  inner_join(obs_in_path, by = "KEGG_Pathway")
 
-## Comparing genes related with increases in maintenance respiration
-#Create the design matrix for the samples focusing on the Rm_values, first do an NMDS of gene expr using  Rm-values, is it clear?
-design_m <- sample_ID %>%
-  select(sample, treatment, tre_rep) %>%
-  inner_join(Rm %>% select(Rm_Rsb, tre_rep), by = "tre_rep") %>%
-  select(sample, Rm_Rsb)
+vec <- DE_genes %>%
+  filter(type == "Down") %>%
+  distinct(KEGG_ko) %>% 
+  pull(KEGG_ko)
+  
+```
 
-y <- DGEList(bbmap_mat)
-
-#Changing the grouping to the RM-values
-y$samples$group = sample_ID %>% select(sample, treatment, tre_rep) %>% inner_join(Rm %>% select(Rm_Rsb, tre_rep), by = "tre_rep") %>%
-  select(sample, Rm_Rsb) 
-
-#It has been correctly done as they match with the original sample file
-groupF <- y$samples$group
-
-#Another way of verifying
-match(rownames(y$samples), colnames(bbmap_mat))
-
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+up <- read_tsv("../data/upreg_genes_TvsC.txt") %>%
+  select(KO_term) %>%
+  separate(KO_term, sep = 10, c("KEGG_ko","genename")) %>%
+  mutate(KEGG_ko = gsub("ko:","", KEGG_ko)) %>%
+  separate(genename, sep = ";", c("genename","desc"))
 ```
