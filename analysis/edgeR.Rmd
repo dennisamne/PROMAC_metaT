@@ -10,7 +10,7 @@ output:
       fig_caption: yes
       code_folding: hide
 ---
-
+# Comparing responses to nutrient inputs at different temperature regimes
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
@@ -20,6 +20,7 @@ library(tidyverse)
 library(edgeR)
 library(data.table)
 library(viridis)
+library(kableExtra)
 ```
 
 ```{r file-loading, message=FALSE, warning=FALSE, cache=TRUE}
@@ -79,9 +80,9 @@ bbmap_p <- bbmap %>%
    ungroup()
 ```
 
-# EdgeR-analysis day 10 
+# EdgeR-analysis KO-terms day 10 
 ```{r edgeR_setup, message=FALSE, warning=FALSE}
-# Do T vs C only day 10 (T3)
+# Do N vs C only day 10 (T3)
  bbmap_mat <- bbmap_p %>% 
   dplyr::select(-t, -tpm) %>%
   inner_join(eggnogs %>% distinct(orf, KEGG_ko), by = "orf") %>%
@@ -91,7 +92,7 @@ bbmap_p <- bbmap %>%
   summarise(count = sum(count)) %>%
   ungroup() %>%
   inner_join(sample_ID, by = "sample") %>%
-  filter(day == "10") %>% #Removing day 10
+  filter(day == "10") %>% #Keeping day 10
   select(sample, KEGG_ko, count) %>%
   spread(sample, count, fill = 0) %>%
   column_to_rownames("KEGG_ko") %>%
@@ -146,7 +147,7 @@ NvsC <- makeContrasts(N - C, levels=trial_mat)
 TNvsT <- makeContrasts(TN - t, levels=trial_mat)
 ```
 
-```{r CvsT, message=FALSE, warning=FALSE}
+```{r TvsC, message=FALSE, warning=FALSE}
 qlf <- glmQLFTest(fit, contrast=TvsC)
 
 #Most changing genes
@@ -157,7 +158,7 @@ topTags(qlf)
 summary(decideTests(qlf))
 # Blue lines indicate 2-fold changes
 
-pdf("../results/edgeRTNvsC2logFC.pdf")
+pdf("../results/edgeRTvsC2logFC.pdf")
 plotMD(qlf)
 abline(h=c(-1, 1), col="blue")
 dev.off()
@@ -168,7 +169,7 @@ tr <- glmTreat(fit, contrast=TvsC, lfc=log2(DIFF_TRESHOLD))
 #The summary lets us know there are 1015 genes upregulated in  the C-treatment, and 4045 upregulated in  the TN treatment at a 2.5 logFC value.
 diff_expr_sum <- summary(decideTestsDGE(tr)) %>% as.data.frame()
 
-write_tsv(diff_expr_sum, "../results/edgeR_gene_partitioningCvsT.tsv")
+write_tsv(diff_expr_sum, "../results/edgeR_gene_partitioningTvsC.tsv")
 
 TvsC <- tr$table %>%
   rownames_to_column("KEGG_ko")
@@ -191,7 +192,7 @@ topTags(qlf)
 summary(decideTests(qlf))
 # Blue lines indicate 2-fold changes
 
-pdf("../results/edgeRCvsN2logFC.pdf")
+pdf("../results/edgeRNvsC2logFC.pdf")
 plotMD(qlf)
 abline(h=c(-1, 1), col="blue")
 dev.off()
@@ -199,11 +200,11 @@ dev.off()
 #Trying to look at the fold changes the edgeR way
 tr <- glmTreat(fit, contrast=NvsC, lfc=log2(DIFF_TRESHOLD))
 
-CvsN <- tr$table %>%
+NvsC <- tr$table %>%
   rownames_to_column("KEGG_ko")
 ```
 
-```{r TvsTN, message=FALSE, warning=FALSE}
+```{r TNvsT, message=FALSE, warning=FALSE}
 qlf <- glmQLFTest(fit, contrast=TNvsT)
 
 #Most changing genes
@@ -214,7 +215,7 @@ topTags(qlf)
 summary(decideTests(qlf))
 # Blue lines indicate 2-fold changes
 
-pdf("../results/edgeRTvsNT2logFC.pdf")
+pdf("../results/edgeRTNvsT2logFC.pdf")
 plotMD(qlf)
 abline(h=c(-1, 1), col="blue")
 dev.off()
@@ -222,7 +223,7 @@ dev.off()
 #Trying to look at the fold changes the edgeR way
 tr <- glmTreat(fit, contrast=TNvsT, lfc=log2(DIFF_TRESHOLD))
 
-TvsTN <- tr$table %>%
+TNvsT <- tr$table %>%
   rownames_to_column("KEGG_ko")
 ```
 
@@ -230,9 +231,9 @@ TvsTN <- tr$table %>%
 #Combiningputput df's and performing fdr correction
 TvsC %>%
   as.data.frame() %>%
-  mutate(contrast = "CvsT") %>%
-  bind_rows(CvsN %>% mutate(contrast = "CsvN")) %>%
-  bind_rows(TvsTN %>% mutate(contrast = "TvsTN")) %>%
+  mutate(contrast = "TvsC") %>%
+  bind_rows(NvsC %>% mutate(contrast = "NvsC")) %>%
+  bind_rows(TNvsT %>% mutate(contrast = "TNvsT")) %>%
   mutate(fdr = p.adjust(PValue, method = "fdr")) %>%
   mutate(type = 
            case_when(
@@ -245,11 +246,11 @@ TvsC %>%
 ```
 
 ## Inspecting contrasts
-```{r CvsT_KO, message=FALSE, warning=FALSE}
+```{r TvsC_KO, message=FALSE, warning=FALSE, results=FALSE}
 contrasts <- read_tsv("../results/edgeR_contrasts.tsv")
 
 mat <- contrasts %>%
-  filter(contrast == "CvsT") %>%
+  filter(contrast == "TvsC") %>%
   filter(fdr <= SIGNIFICANCE) %>%
   arrange(desc(logFC)) %>%
   mutate(KEGG_ko = factor(KEGG_ko) %>% forcats::fct_reorder(logFC, .desc = TRUE)) %>%
@@ -274,7 +275,7 @@ bbmap_plot <- bbmap_p %>%
   summarise(mean = mean(count), stdev = sd(count)) %>%
   ungroup() %>%
   inner_join(contrasts %>%
-    filter(contrast == "CvsT") %>%
+    filter(contrast == "TvsC") %>%
     filter(fdr <= SIGNIFICANCE) %>%
     arrange(desc(logFC)) %>%
     select(KEGG_ko, logFC), by = "KEGG_ko") %>%
@@ -289,13 +290,23 @@ bbmap_plot %>%
   scale_colour_viridis(discrete = FALSE) +
   theme(axis.text.x = element_blank()) +
   facet_wrap(~treatment)
-  ggsave("../results/CvsT_KO_logFC.png")
+  ggsave("../results/TvsC_KO_logFC.png")
+  
+  
+contrasts %>% 
+  filter(contrast == "TvsC") %>%
+  filter(fdr <= 0.05) %>%
+ ggplot(mapping = aes(x = KEGG_ko, y = logFC, colour=logCPM)) +
+  geom_point(aes(size= fdr)) +
+  scale_colour_viridis(discrete = FALSE) +
+  theme(axis.text.y = element_blank(), axis.ticks.y =element_blank()) +
+  coord_flip()
 ```
-
-## Verifying that genes are up in T when they are "down" - use this and put a heatmap of logFC underneath and order the genes based on logFC for a cool visualization
+In the TvsC contrast there were `r nrow(contrasts %>% filter(contrast == "TvsC") %>% filter(fdr <= 0.05 & logFC >= DIFF_TRESHOLD))` genes  significantly upregulated. And `r nrow(contrasts %>% filter(contrast == "TvsC") %>% filter(fdr <= 0.05 & logFC <= -DIFF_TRESHOLD))` Downregulated. Out of a total of `r nrow(contrasts %>% filter(contrast =="TvsC"))`genes.
+## Alternative visualization of the TvsC contrast significant genes.
 ```{r TvsC_KO_plot, message=FALSE, warning=FALSE, fig.cap = "Differentially expressed genes C vs T"}
 
- DE_genes <- contrasts %>%
+DE_genes <- contrasts %>%
    filter(contrast == "TvsC") %>%
    filter(type %in% c("Up","Down"))
 
@@ -319,58 +330,160 @@ bbmap_p %>%
   ggplot(mapping = aes(x = KEGG_ko, y = count, fill = treatment)) +
   geom_col()
 ```
+## Overview stats
 
-## NvsC
-```{r NvsC_KO, message=FALSE, warning=FALSE, eval=FALSE}
-qlf <- glmQLFTest(fit, contrast=CvsN)
-
-#Most changing genes
-topTags(qlf)
-
-#Summaroy of genes up/downregulated, upregulated in this case refes to upregulated in C-treatment, negative is upregulated in TN-treatment.
-
-summary(decideTests(qlf))
-# Blue lines indicate 2-fold changes
-
-pdf("../results/edgeRNvsC2logFC.pdf")
-plotMD(qlf)
-abline(h=c(-1, 1), col="blue")
-dev.off()
-
-#Trying to look at the fold changes the edgeR way
-tr <- glmTreat(fit, contrast=NvsC, lfc=log2(DIFF_TRESHOLD))
-
-#The summary lets us know there are 1015 genes upregulated in  the C-treatment, and 4045 upregulated in  the TN treatment at a 2.5 logFC value.
-diff_expr_sum <- summary(decideTestsDGE(tr)) %>% as.data.frame()
-
-write_tsv(diff_expr_sum, "../results/edgeR_gene_partitioningNvsC.tsv")
-
-#Does the fdr correction apply to the summary?
-obj <- tr$table %>%
-  #mutate(fdr = p.adjust(PValue, method = "fdr")) %>%
-  mutate(type = 
-           case_when(
-             (fdr <= SIGNIFICANCE & logFC >= DIFF_TRESHOLD) ~ "Up",
-             (fdr <= SIGNIFICANCE & logFC <= -DIFF_TRESHOLD) ~ "Down",
-             TRUE ~"non-DE"
-           )) %>%
-  mutate(type = forcats::as_factor(type) %>% fct_relevel("Up","non-DE","Down")) %>%
-  group_by(type) %>%
+This table shows the number of significantly upregulated/downregulated KO-terms as well as non-significant KO-terms per contrast. 
+```{r}
+kable(contrasts %>%
+  group_by(contrast, type) %>%
   tally() %>%
-  ungroup() # a few genes are missing using this approach, in the significant fractions, but are not in the non-DE?? The total genes still add up using the summary(decideTests(tr)), on the original edgeR-object...
-
-CvsN <- tr$table %>%
-  rownames_to_column("KEGG_ko")
-
-#Doing the same but setting treshold to 2.5 logFC
-pdf("../results/edgeRNvsC2logFC2.5.pdf")
-plotMD(tr)
-abline(h=c(-DIFF_TRESHOLD, DIFF_TRESHOLD), col="blue")
-dev.off()
+  ungroup() %>%
+  spread(contrast, n, fill = 0)) %>%
+  kable_styling(bootstrap_options = c("striped", "hover")) %>%
+  add_header_above(c("Table 1. EdgeR stats contrasts" = 4), font_size = 18) %>%
+  scroll_box(width = "100%", height = "200px")
 ```
 
-```{r fdr_correction, message=FALSE, warning=FALSE, eval=FALSE}
+## NvsC
+In the NvsC contrast there were `r nrow(contrasts %>% filter(contrast == "NvsC") %>% filter(fdr <= 0.05 & logFC >= DIFF_TRESHOLD))` genes  significantly upregulated. And `r nrow(contrasts %>% filter(contrast == "NvsC") %>% filter(fdr <= 0.05 & logFC <= -DIFF_TRESHOLD))` Downregulated. Out of a total of `r nrow(contrasts %>% filter(contrast == "NvsC"))`KO-terms.
+```{r NvsC_KO, message=FALSE, warning=FALSE, eval=FALSE}
+DE_genes <- contrasts %>%
+   filter(contrast == "NvsC") %>%
+   filter(type %in% c("Up","Down"))
 
+contrasts %>% 
+  filter(contrast == "NvsC") %>%
+  filter(fdr <= 0.05) %>%
+ ggplot(mapping = aes(x = KEGG_ko, y = logFC, colour=logCPM)) +
+  geom_point(aes(size= fdr)) +
+  scale_colour_viridis(discrete = FALSE) +
+  theme(axis.text.y = element_blank(), axis.ticks.y =element_blank()) +
+  coord_flip()
+```
+
+```{r NvsC_volcano}
+contrasts %>% 
+  filter(contrast == "NvsC") %>%
+  ggplot(mapping = aes(x=logCPM, y = logFC, colour=type, size = type)) +
+  geom_point()  +
+  scale_size_manual(values = c("Down" = 1.5, "Up"=1.5, "non-DE" = 0.3)) +
+  scale_colour_manual(values = c("Down" = "Blue","Up" = "Red", "non-DE" = "Black")) +
+  theme_minimal()
+```
+KO-term annotations were retrieved from the [KEGG-website](https://www.genome.jp/kegg/ko.html) By pasting the produced vector of KO-terms and copying the output into a new file.
+```{r KO-term_identification, message=FALSE, warning=FALSE, results=FALSE}
+contrasts %>%
+filter(contrast == "NvsC" & type == "Up") %>%
+  mutate(KEGG_ko = gsub("ko:","",KEGG_ko)) %>%
+  mutate(gene = paste0("gene", row_number())) %>%
+  select(gene, KEGG_ko) %>%
+  write_tsv("../results/NvsC_Up.tsv")
+
+contrasts %>%
+filter(contrast == "NvsC" & type == "Down") %>%
+  mutate(KEGG_ko = gsub("ko:","",KEGG_ko)) %>%
+  mutate(gene = paste0("gene", row_number())) %>%
+  select(gene, KEGG_ko) %>%
+  write_tsv("../results/NvsC_Down.tsv")
+
+contrasts %>%
+filter(contrast == "NvsC" & type == "Up") %>%
+  mutate(KEGG_ko = gsub("ko:","",KEGG_ko)) %>%
+  mutate(gene = paste0("gene", row_number())) %>%
+  select(gene, KEGG_ko) %>%
+  pull(KEGG_ko)
+
+contrasts %>%
+filter(contrast == "NvsC" & type == "Down") %>%
+  mutate(KEGG_ko = gsub("ko:","",KEGG_ko)) %>%
+  mutate(gene = paste0("gene", row_number())) %>%
+  select(gene, KEGG_ko) %>%
+  pull(KEGG_ko)
+```
+
+```{r}
+NvsCUp <- read_tsv("../results/CvsN_up_legend.tsv", col_names = "KEGG_ko") %>%
+  separate(KEGG_ko, c("KEGG_ko","gene"), sep = 9) %>%
+  separate(gene, c ("gene","description"), sep = ";") %>%
+  mutate(gene = gsub(" ","", gene))
+
+kable(NvsCUp) %>%
+  kable_styling(bootstrap_options = c("striped", "hover")) %>%
+    add_header_above(c("Table. Upregulated KO's in NvsC" = 3), font_size = 18) %>%
+  scroll_box(width = "100%", height = "200px")
+```
+Interesting genes included   
+[aer](https://www.uniprot.org/uniprotkb/Q9I3F6/entry) - ionvolved in chemotaxis (aerotaxis).   
+[arcA](https://www.uniprot.org/uniprotkb/P0A9Q1/entry) - [Two component system](https://www.mechanobio.info/pathogenesis/what-are-two-component-regulatory-systems/#:~:text=Two%2Dcomponent%20regulatory%20systems%20(TCRS,modulation%20of%20gene%20expression%20occurs.)   
+[barA,gacS,varS](https://www.genome.jp/entry/K07678) - two component system.   
+[cheA](https://www.uniprot.org/uniprotkb/P07363/entry) - two component system involved in chemotaxis     
+[cheB](https://www.uniprot.org/uniprotkb/P04042/entry) - involved in chemotaxis   
+[cheBR](https://www.uniprot.org/uniprotkb/A0A0P7Z799/entry) - involved in chemotaxis   
+[cheV](https://www.uniprot.org/uniprotkb/P37599/entry) - invoved in chemotaxis   
+[cheW](https://www.uniprot.org/uniprotkb/P0A964/entry) - involved in chemotaxis   
+[cheZ](https://www.uniprot.org/uniprotkb/P0A9H9/entry) - involved in chemotaxis 
+[cikA](https://www.uniprot.org/uniprotkb/A0A2K8WMD5/entry) - two component system   
+[cphA](https://en.wikipedia.org/wiki/Cyanophycin) - polymer used during phosphate or sulfur starvation. 
+[csGE](https://www.genome.jp/dbget-bin/www_bget?ko:K04337) - [curli production](https://en.wikipedia.org/wiki/Curli)   
+
+[cydC](https://www.uniprot.org/uniprotkb/P23886/entry) - involved in transport   
+[dcuB](https://www.uniprot.org/uniprotkb/P0ABN9/entry) - periplasm across inner membrane transport (C4).  
+[FAB2, SSI2, desA1](https://www.genome.jp/dbget-bin/www_bget?ko:K03921) - Fatty acid biosynthesis.   
+[fadB](https://www.uniprot.org/uniprotkb/P21177/entry) - Fatty acid beta oxidation   
+[fadE](https://www.uniprot.org/uniprotkb/Q47146/entry) - Fatty acid beta oxidation   
+[fadJ](https://www.uniprot.org/uniprotkb/P77399/entry) - FAtty acid beta oxidation   
+[fadR](https://www.uniprot.org/uniprotkb/P0A8V6/entry) - Multifunctional regulator, represses genes required for fatty acid transport and beta-oxidation including fadA, fadB, fadD, fadL and fadE. Activates transcription of at least three genes required for unsaturated fatty acid biosynthesis: fabA, fabB and iclR, the gene encoding the transcriptional regulator of the aceBAK operon encoding the glyoxylate shunt enzymes.   
+[gspC](https://www.uniprot.org/uniprotkb/P45757/entry) - Type II secretion, potentially involved in [signalling](https://en.wikipedia.org/wiki/Type_II_secretion_system).  
+[K17213](https://www.genome.jp/dbget-bin/www_bget?ko+K17213) - ABC-transporter
+[K17214](https://www.genome.jp/dbget-bin/www_bget?ko+K17214) - ABC-transporter
+[lapA](https://www.genome.jp/dbget-bin/www_bget?ko+K12549) - surface adhesion protein in biofilm formation   
+[luxO](https://www.genome.jp/dbget-bin/www_bget?ko+K10912) - two component system invlved in quorom sensing and biofilm formation.   
+[luxS](https://www.genome.jp/dbget-bin/www_bget?ko+K07173) - involved in cystein methionine met, quorom sensing and biofilm formation.
+[mcp](https://www.genome.jp/dbget-bin/www_bget?ko+K03406) - methyl accepting chemotaxis protein (two component system)   
+[motY](https://www.genome.jp/dbget-bin/www_bget?ko+K21218) - flagellar assembly.   
+[mscL](https://www.genome.jp/dbget-bin/www_bget?ko+K03282) - signalling and transporters.   
+[mscS](https://www.genome.jp/dbget-bin/www_bget?ko+K03442) - signalling and transporters.     
+[mshA](https://www.genome.jp/dbget-bin/www_bget?ko+K10924) - biofilm formation and T2SS.   
+[mshB](https://www.genome.jp/dbget-bin/www_bget?ko+K10925) - biofilm formation and T2SS.   
+[mshD](https://www.genome.jp/dbget-bin/www_bget?ko+K10927) - biofilm formation and T2SS.   
+[mshI](https://www.genome.jp/dbget-bin/www_bget?ko+K12279) - MSHA biogenesis protein T2SS.   
+[mshL](https://www.genome.jp/dbget-bin/www_bget?ko+K12282) - MSHA biogenesis protein T2SS.   
+[mshP](https://www.genome.jp/dbget-bin/www_bget?ko+K12286) - MSHA biogenesis protein T2SS.   
+[napA](https://www.genome.jp/dbget-bin/www_bget?ko+K02567) - nitrate reductase , Denitrification, nitrate => nitrogen, Dissimilatory nitrate reduction, nitrate => ammonia   
+[napE](https://www.genome.jp/dbget-bin/www_bget?ko+K02571) - periplasmic nitrate reductase   
+[narB](https://www.genome.jp/dbget-bin/www_bget?ko+K00367) - Nitrogen metabolism.
+
+
+
+
+## TNvsT
+In the NvsC contrast there were `r nrow(contrasts %>% filter(contrast == "TNvsT") %>% filter(fdr <= 0.05 & logFC >= DIFF_TRESHOLD))` genes  significantly upregulated. And `r nrow(contrasts %>% filter(contrast == "TNvsT") %>% filter(fdr <= 0.05 & logFC <= -DIFF_TRESHOLD))` Downregulated. Out of a total of `r nrow(contrasts %>% filter(contrast == "TNvsT"))`genes.
+```{r TNvsT_KO, message=FALSE, warning=FALSE, eval=FALSE}
+DE_genes <- contrasts %>%
+   filter(contrast == "TNvsT") %>%
+   filter(type %in% c("Up","Down"))
+
+contrasts %>% 
+  filter(contrast == "TNvsT") %>%
+  filter(fdr <= 0.05) %>%
+ ggplot(mapping = aes(x = KEGG_ko, y = logFC, colour=logCPM)) +
+  geom_point(aes(size= fdr)) +
+  scale_colour_viridis(discrete = FALSE) +
+  theme(axis.text.y = element_blank(), axis.ticks.y =element_blank()) +
+  coord_flip()
+```
+
+```{r TNvsT_volcano}
+contrasts %>% 
+  filter(contrast %in% c("TNvsT", "NvsC")) %>%
+  ggplot(mapping = aes(x=logCPM, y = logFC, colour=type, size = type)) +
+  geom_point()  +
+  scale_size_manual(values = c("Down" = 1.5, "Up"=1.5, "non-DE" = 0.3)) +
+  scale_colour_manual(values = c("Down" = "Blue","Up" = "Red", "non-DE" = "Black")) +
+  theme_minimal() +
+  facet_wrap(~ contrast)
+
+ggsave("../results/nutrient_add_contrasts.pdf")
 ```
 
 ## Creating a key with pathway and KO-term
