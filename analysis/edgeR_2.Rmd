@@ -1,0 +1,466 @@
+---
+title: "EdgeR_2"
+author: "Dennis Amnebrink"
+date: '2022-10-05'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r constants, message=FALSE, warning=FALSE}
+SIGNIFICANCE = 0.05
+DIFF_TRESHOLD = 2.5
+MIN_COUNT = 15
+MIN_SAMPLE = 2
+```
+
+```{r libraries}
+library(data.table)
+library(edgeR)
+library(tidyverse)
+library(kableExtra)
+```
+
+```{r read-data}
+#Count file for all orfs, tpm is calculated per sample
+bbmap <- fread("../data/bbmap_counts.tsv.gz", sep = "\t") %>%
+              filter(count > 0)  %>%                               # removing 0 counts to reduce size of table
+              mutate(Geneid = str_replace(Geneid, "[0-9]*_",""),   # Joining in chr and geneid to match format of eggnog naming.
+                     orf = paste(Chr,Geneid, sep = "_"),
+                     sample = str_extract(sample, "P[0-9]*_[0-9]*")) %>% # Removing extra numbers in sample to match sample_ID format
+              dplyr::select(-Geneid,-Chr) %>%
+              dplyr::select(orf,Start,End,Strand,Length,sample,count,tpm) 
+
+#Reading in annotations
+eggnogs <- fread("../data/eggnog_annotations.tsv.gz", sep = '\t')
+
+#File to connect NGI ID with our own classification ID, add the µ-values to this file for testing later, or do that in a sep file?
+sample_ID <- read_tsv("../data/J.Pinhassi_21_02_sample_info.txt") %>%
+  dplyr::select(1:2) %>%
+  dplyr::rename(sample = 1, sample_name = 2) %>%
+  mutate(sample_name = str_replace(sample_name, "[0-9]*:","")) %>%
+  separate(sample_name, c("treatment","timepoint"), sep = ",") %>%
+  mutate(treatment = gsub("NT","TN", treatment)) %>%
+  mutate(sample_name = paste(timepoint, treatment, sep = "_")) %>%
+  separate(treatment, c("treatment","replicate"), sep = -1) %>%
+  mutate(tre_rep = gsub("_","", sample_name)) %>%
+  mutate(tre_rep = toupper(tre_rep)) %>%
+  mutate(day = case_when( timepoint == "t3" ~ 10,
+                          TRUE ~ 17
+                          )
+         ) %>%
+  as.data.table()
+
+#Reading in taxonomic annotation of reads
+taxonomy <- read_tsv("../data/eukulele_phylodb.tsv") %>%
+  select(-species) %>%
+  rename(species = "genus", genus = "family", family = "order", order = "class", class = "phylum", phylum = "kingdom") %>%
+  as.data.table()
+```
+
+```{r prok-filter, message=FALSE, warning=FALSE, cache=TRUE}
+#Removing non-prokreads as well as recalculating tpm over prok frac.
+bbmap_p <- bbmap %>%
+  semi_join(taxonomy %>% filter(domain %in% c("Bacteria", "Archaea")), 
+            by = "orf") 
+```
+
+# EdgeR test
+```{r}
+design <- model.matrix(~ 0 + factor(c(1,1,1,2,2,2,3,3,3,4,4,4)))
+colnames(design) <- c("warm_control","cold_control","cold_nutrient","warm_nutrient")
+
+#Creating DGElist
+dgelist <- bbmap_p %>%
+  group_by(orf) %>%
+  filter(sum(count) >= MIN_COUNT, n() >= MIN_SAMPLE) %>%
+  ungroup() %>%
+  semi_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  inner_join(eggnogs, by = 'orf') %>%
+  group_by(seed_eggNOG_ortholog, sample) %>%
+  summarise(count = sum(count), .groups = 'drop') %>%
+  ungroup() %>%
+  pivot_wider(names_from = sample, values_from = count, values_fill = 0) %>%
+  as.data.frame() %>%
+  tibble::column_to_rownames('seed_eggNOG_ortholog') %>%
+  DGEList() %>%
+  calcNormFactors() %>%
+  estimateDisp(design) %>%
+  glmQLFit(design, robust = TRUE)
+
+
+
+  
+  
+
+#Creating contrasts
+my.contrasts <- makeContrasts(cold_nutrientvscold_control=cold_nutrient-cold_control,
+                              warm_nutrientvswarm_control=warm_nutrient-warm_control,
+                              levels=design)
+
+
+
+#Creating contrasts
+qlf.NvsC <- glmQLFTest(dgelist, contrast=my.contrasts[,"cold_nutrientvscold_control"])
+
+qlf.TNvsT <- glmQLFTest(dgelist, contrast=my.contrasts[,"warm_nutrientvswarm_control"])
+
+#Combining tables and mutating fdr-values
+qlf.NvsC$table %>%
+  as.data.frame() %>%
+  rownames_to_column("seed_eggNOG_ortholog") %>%
+  mutate(contrast = "NvsC") %>%
+  bind_rows(
+    qlf.TNvsT$table %>%
+    as.data.frame() %>%
+    rownames_to_column("seed_eggNOG_ortholog") %>%
+    mutate(contrast = "TNvsT") %>%
+    as.data.frame()
+  ) %>%
+  mutate(fdr = p.adjust(PValue, method = "fdr")) %>%
+  mutate(type = 
+           case_when(
+             (fdr <= SIGNIFICANCE & logFC >= DIFF_TRESHOLD) ~ "Up",
+             (fdr <= SIGNIFICANCE & logFC <= -DIFF_TRESHOLD) ~ "Down",
+             TRUE ~"non-DE"
+           )) %>%
+  mutate(type = forcats::as_factor(type) %>% fct_relevel("Up","non-DE","Down")) %>%
+  write_tsv("../results/edgeR_contrasts.tsv")
+```
+
+## Sanity checking
+```{r}
+contrasts <- read_tsv("../results/edgeR_contrasts.tsv")
+
+#Plotting the top20 seed_eggNOG_otrhologs to see if contrasts make sense, using tpm
+plot_obj <- bbmap_p %>% 
+  semi_join(sample_ID %>% filter(day == '10'), by = 'sample') %>% #Filtering out relevant samples
+  inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog), by = "orf") %>%
+  group_by(sample, seed_eggNOG_ortholog) %>% #Summarising counts per seed_eggNOG ortholog and sample
+  summarise(sum_tpm = sum(tpm)) %>%
+  ungroup() %>%
+  inner_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  group_by(treatment, seed_eggNOG_ortholog) %>% #Averaging counts per treatment and seed_eggNOG_ortholog
+  summarise(mean_tpm = mean(sum_tpm)) %>%
+  ungroup() 
+```
+
+```{r}
+#Plotting the genes with the largest logfold-change
+top50_NvsC <- contrasts %>% 
+  filter(contrast == "NvsC" & fdr <= 0.05) %>%
+  arrange(desc(logFC)) %>%
+  slice(1:50) %>%
+  pull(seed_eggNOG_ortholog)
+
+plot_obj %>%
+  filter(treatment %in% c("N","C")) %>%
+  filter(seed_eggNOG_ortholog %in% top50_NvsC) %>%
+  ggplot(mapping = aes(x = seed_eggNOG_ortholog, y = mean_tpm, fill = treatment)) +
+  geom_col() +
+  theme(axis.text.x = element_text(hjust = 1, angle = 60)) +
+  ggtitle("NvsC top 50 logFC")
+```
+
+```{r}
+#Plotting the genes with the largest negative logfold-change
+top50_CvsN <- contrasts %>% 
+  filter(contrast == "NvsC" & fdr <= 0.05) %>%
+  arrange(logFC) %>%
+  slice(1:50) %>%
+  pull(seed_eggNOG_ortholog)
+
+plot_obj %>%
+  filter(treatment %in% c("N","C")) %>%
+  filter(seed_eggNOG_ortholog %in% top50_CvsN) %>%
+  ggplot(mapping = aes(x = seed_eggNOG_ortholog, y = mean_tpm, fill = treatment)) +
+  geom_col() +
+  theme(axis.text.x = element_text(hjust = 1, angle = 60)) +
+  ggtitle("CvsN")
+```
+
+## Overview stats
+
+### Table of edgeR-analysis
+This table shows the number of significantly upregulated/downregulated KO-terms as well as non-significant KO-terms per contrast. 
+```{r}
+kable(contrasts %>%
+  group_by(contrast, type) %>%
+  tally() %>%
+  ungroup() %>%
+  spread(contrast, n, fill = 0)) %>%
+  kable_styling(bootstrap_options = c("striped", "hover")) %>%
+  add_header_above(c("Table 1. EdgeR stats contrasts" = 3), font_size = 18) %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+### Plot of edgeR-analysis
+```{r}
+contrasts %>% 
+  ggplot(mapping = aes(x=logCPM, y = logFC, colour=type, size = type)) +
+  geom_point()  +
+  scale_size_manual(values = c("Down" = 1.5, "Up"=1.5, "non-DE" = 0.3)) +
+  scale_colour_manual(values = c("Down" = "Blue","Up" = "Red", "non-DE" = "Black")) +
+  theme_minimal() +
+  geom_hline(aes(yintercept = DIFF_TRESHOLD), linetype = "dashed", color = "green") +
+  geom_hline(aes(yintercept = -DIFF_TRESHOLD), linetype = "dashed", color = "green") +
+  facet_wrap(~ contrast)
+
+ggsave("../results/edgeR_eggnoG_contrasts.pdf")
+```
+## Summary over changes in large COG-categories between treatments (facet wrap on contrast, and colour by treatment)
+```{r COGCats_NvsC}
+#Plotting the contrast for NvsC
+plot_obj <- bbmap_p %>%
+  semi_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
+  inner_join(eggnogs, by = 'orf') %>%
+  group_by(seed_eggNOG_ortholog, sample) %>%
+  summarise(sum_tpm = sum(tpm), .groups = 'drop') %>%
+  ungroup() %>%
+  inner_join(eggnogs %>% 
+               distinct(seed_eggNOG_ortholog, best_og_cat), 
+             by = "seed_eggNOG_ortholog") %>%
+  separate_rows(best_og_cat, sep = '(?<=.)(?=.)') %>%
+   inner_join(contrasts %>% 
+               filter(contrast == "NvsC") %>% 
+               select(seed_eggNOG_ortholog, type), 
+             by = "seed_eggNOG_ortholog") %>%
+  #filter(type != "non-DE") %>%
+  group_by(sample, best_og_cat, type) %>%
+  summarise(sum_tpm = sum(sum_tpm)) %>%
+  ungroup() %>%
+  inner_join(sample_ID, by = "sample") %>% 
+  group_by(best_og_cat, treatment, type) %>%
+  summarise(mean_tpm = mean(sum_tpm)) %>%
+  ungroup()
+
+## Fix here by arranging in descending values based on the up-regulated genes.
+
+cat_order <- plot_obj %>%
+  filter(treatment %in% c("N")) %>%
+  filter(type == "Up") %>%
+  mutate(best_og_cat = factor(best_og_cat) %>% forcats::fct_reorder(mean_tpm, .desc = TRUE)) %>%
+  arrange(mean_tpm) %>%
+  pull(best_og_cat) %>%
+  as.vector()
+
+NvsC_catvec <- cat_order
+  
+plot_obj %>% 
+  filter(treatment %in% c("N","C")) %>%
+  ggplot(mapping = aes(x = fct_relevel(best_og_cat, NvsC_catvec), y = mean_tpm, fill = fct_relevel(type, c("non-DE", "Down","Up")))) +
+  geom_col() +
+  theme_minimal() +
+  facet_wrap(~ treatment) +
+  coord_flip() +
+  theme(axis.text.x = element_text(hjust = 1, angle = 60)) +
+  ggtitle("COG-category expression of gene expression analysis N and C-treatment")
+
+NvsC_cont <- last_plot()
+
+ggsave("../results/NvsC_COG_cats.png")
+```
+
+```{r COGCats_TNvsT}
+plot_obj <- bbmap_p %>%
+  semi_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
+  inner_join(eggnogs, by = 'orf') %>%
+  group_by(seed_eggNOG_ortholog, sample) %>%
+  summarise(sum_tpm = sum(tpm), .groups = 'drop') %>%
+  ungroup() %>%
+  inner_join(eggnogs %>% 
+               distinct(seed_eggNOG_ortholog, best_og_cat), 
+             by = "seed_eggNOG_ortholog") %>%
+  separate_rows(best_og_cat, sep = '(?<=.)(?=.)') %>%
+   inner_join(contrasts %>% 
+               filter(contrast == "TNvsT") %>% 
+               select(seed_eggNOG_ortholog, type), 
+             by = "seed_eggNOG_ortholog") %>%
+  #filter(type != "non-DE") %>%
+  group_by(sample, best_og_cat, type) %>%
+  summarise(sum_tpm = sum(sum_tpm)) %>%
+  ungroup() %>%
+  inner_join(sample_ID, by = "sample") %>% 
+  group_by(best_og_cat, treatment, type) %>%
+  summarise(mean_tpm = mean(sum_tpm)) %>%
+  ungroup()
+
+## Fix here by arranging in descending values based on the up-regulated genes. 
+
+cat_order <- plot_obj %>%
+  filter(treatment %in% c("TN")) %>%
+  filter(type == "Up") %>%
+  mutate(best_og_cat = factor(best_og_cat) %>% forcats::fct_reorder(mean_tpm, .desc = TRUE)) %>%
+  arrange(mean_tpm) %>%
+  pull(best_og_cat) %>%
+  as.vector()
+
+TNvsT_catvec <- c("A","W",cat_order)
+  
+#The last two categories in the vector are missing since they do do not have any upregulated genes (A,W), so add to bottom. To add to the picture I had in mind, grey them out and do not include them in the ranking plot.
+plot_obj %>% 
+  filter(treatment %in% c("TN","T")) %>%
+  ggplot(mapping = aes(x = fct_relevel(best_og_cat, TNvsT_catvec), y = mean_tpm, fill = fct_relevel(type, c("non-DE", "Down","Up")))) +
+  geom_col() +
+  theme_minimal() +
+  facet_wrap(~ treatment) +
+  coord_flip() +
+  theme(axis.text.x = element_text(hjust = 1, angle = 60),legend.position = "bottom") +
+  ggtitle("COG-category expression of gene expression analysis TN and T-treatment") +
+  scale_fill_discrete(name = "Type")
+
+TNvsT_cont <- last_plot()
+
+
+
+ggsave("../results/TNvsT_COG.png")
+
+NvsC
+NvsC_cont
+TNvsT_cont
+
+```
+Here add the lines between COG-categories between the COG-categoriew to really show the difference between treatments.
+```{r contrast_comparison}
+
+# Do a classic line chart, mutate in line numbers to arrange the categories, and use the categories as labels instead.
+#This vector is what fucks up the plotting, so do this differently
+TNvsT_catvec <- c("A","W",TNvsT_catvec)
+
+NvsC_rank_df <- NvsC_catvec %>% 
+  as.data.frame() %>%
+  mutate(rank = row_number()) %>%
+  rename(category = 1)  %>%
+  mutate(contrast = "NvsC")
+
+TNvsT_rank_df <- TNvsT_catvec %>%
+  as.data.frame() %>%
+  mutate(rank = row_number()) %>%
+  rename(category = 1) %>%
+  mutate(contrast = "TNvsT")
+
+cat_df <- NvsC_rank_df %>%
+  bind_rows(TNvsT_rank_df)
+
+
+mutate(best_og_cat = factor(best_og_cat) %>% forcats::fct_reorder(mean_tpm, .desc = TRUE))
+
+#Trying ewith cats straight
+cat_df %>%
+  mutate(category = as.factor(category) %>% forcats::fct_relevel(NvsC_catvec)) %>%
+  ggplot(mapping = aes(x = contrast, y = category, group = rank)) +
+  geom_line() +
+  scale_y_discrete()
+
+#Trying with ranks instead an adding labels later
+cont_order <- cat_df %>%
+  mutate(crank = as.integer(rank)) %>%
+  mutate(new_contrast = as.integer(ifelse(contrast == "NvsC", 1,2))) %>%
+  ggplot(mapping = aes(x = new_contrast, y = rank, group = category)) +
+  geom_line() +
+  scale_y_continuous(breaks = unique(cat_df$rank), labels = NvsC_catvec,
+                     sec.axis = sec_axis(trans=~.*1, breaks = unique(cat_df$rank) ,name="", labels = TNvsT_catvec)) +
+  scale_x_continuous(breaks = c(1,2), labels = unique(cat_df$contrast)) +
+  theme_minimal() +
+  theme(panel.grid = element_blank(), axis.text.x = element_blank()) +
+  ylab("") +
+  xlab("")
+
+
+
+trial_df <- cbind(as.data.frame(TNvsT_catvec), as.data.frame(NvsC_catvec))
+
+#Data in wide format for parcoords
+
+parcoords(trial_df, rownames = FALSE, reorderable = TRUE,brushMode = "1d-multi")
+
+
+last_plot()
+```
+
+```{r patchwork_contrasts}
+
+combined <- NvsC_cont  + ggtitle("") + xlab("") +
+  cont_order +
+  TNvsT_cont + ggtitle("") + xlab("") +
+   plot_annotation(title = 'Contrast response comparison') 
+
+
+ NvsC_cont  + ggtitle("") + xlab("") + theme(legend.position = "none", axis.text.y = element_blank()) +
+   plot_spacer() +
+  cont_order +
+   plot_spacer() +
+  TNvsT_cont + ggtitle("") + xlab("")  + theme(axis.text.y = element_blank()) +
+  plot_annotation(title = 'Contrast response comparison') +
+  plot_layout(ncol = 5, nrow = 1, widths = c(1,-0.08,0.1,-0.1,1), byrow = FALSE)
+ 
+ 
+ 
+ggsave("../results/contrasts_COG.pdf")
+
+
+  
+
+
+ggsave("../results/contrast_comparison.pdf")
+
+```
+
+It is noteworthy that the majorty of the genes downregulated (that is more elevated in the C treatment) belong to category P. While a wider response is seen in the N-treatment.
+```{r}
+#Plotting the contrast for TNvsT
+plot_obj <- bbmap_p %>%
+  semi_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
+  inner_join(eggnogs, by = 'orf') %>%
+  group_by(seed_eggNOG_ortholog, sample) %>%
+  summarise(sum_tpm = sum(tpm), .groups = 'drop') %>%
+  ungroup() %>%
+  inner_join(eggnogs %>% 
+               distinct(seed_eggNOG_ortholog, best_og_cat), 
+             by = "seed_eggNOG_ortholog") %>%
+  separate_rows(best_og_cat, sep = '(?<=.)(?=.)') %>%
+   inner_join(contrasts %>% 
+               filter(contrast == "TNvsT") %>% 
+               select(seed_eggNOG_ortholog, type), 
+             by = "seed_eggNOG_ortholog") %>%
+  filter(type != "non-DE") %>%
+  group_by(sample, best_og_cat, type) %>%
+  summarise(sum_tpm = sum(sum_tpm)) %>%
+  ungroup() %>%
+  inner_join(sample_ID, by = "sample") %>% 
+  group_by(best_og_cat, treatment, type) %>%
+  summarise(mean_tpm = mean(sum_tpm)) %>%
+  ungroup()
+
+plot_obj %>% 
+  filter(treatment %in% c("TN","T")) %>%
+  ggplot(mapping = aes(x = fct_relevel(best_og_cat, cat_order), y = mean_tpm, fill = treatment)) +
+  geom_col() +
+  theme_minimal() +
+  facet_wrap(~ type) +
+  coord_flip() +
+  theme(axis.text.x = element_text(hjust = 1, angle = 60)) +
+  ggtitle("COG-category expression of gene expression analysis TN and T-treatment")
+```
+In the TN vs T treatment instead a diverse response in seen spanning the majority of categories for both treatment TN and T.
+### Number of eggnogs in each cog-category per contrast
+```{r}
+contrasts %>%
+  filter(type != "non-DE") %>%
+  inner_join(eggnogs %>% 
+               distinct(seed_eggNOG_ortholog, best_og_cat) %>%
+               separate_rows(best_og_cat, sep = '(?<=.)(?=.)'),
+             by = "seed_eggNOG_ortholog") %>%
+  group_by(contrast, best_og_cat, type) %>%
+  tally() %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = best_og_cat, y = n, fill = type)) +
+  geom_col() +
+  theme_minimal() +
+  facet_wrap(~ contrast) +
+  coord_flip()
+```
+
+
