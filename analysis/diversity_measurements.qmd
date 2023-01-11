@@ -1,0 +1,99 @@
+---
+title: "Diversity_measurements"
+format: html
+editor: visual
+---
+
+```{r}
+#| label: libraries3
+#| warning: false
+library(vegan)
+library(tidyverse)
+library(data.table)
+```
+
+```{r}
+#| label: file_loading3
+#| warning: false
+#| cache: true
+#Count file for all orfs, tpm is calculated per sample
+bbmap <- fread("../data/bbmap_counts.tsv.gz", sep = "\t") %>%
+              filter(count > 0)  %>%                               # removing 0 counts to reduce size of table
+              mutate(Geneid = str_replace(Geneid, "[0-9]*_",""),   # Joining in chr and geneid to match format of eggnog naming.
+                     orf = paste(Chr,Geneid, sep = "_"),
+                     sample = str_extract(sample, "P[0-9]*_[0-9]*")) %>% # Removing extra numbers in sample to match sample_ID format
+              dplyr::select(-Geneid,-Chr) %>%
+              dplyr::select(orf,Start,End,Strand,Length,sample,count,tpm) 
+
+sample_ID <- read_tsv("../data/J.Pinhassi_21_02_sample_info.txt") %>%
+  dplyr::select(1:2) %>%
+  dplyr::rename(sample = 1, sample_name = 2) %>%
+  mutate(sample_name = str_replace(sample_name, "[0-9]*:","")) %>%
+  separate(sample_name, c("treatment","timepoint"), sep = ",") %>%
+  mutate(treatment = gsub("NT","TN", treatment)) %>%
+  mutate(sample_name = paste(timepoint, treatment, sep = "_")) %>%
+  separate(treatment, c("treatment","replicate"), sep = -1) %>%
+  mutate(tre_rep = gsub("_","", sample_name)) %>%
+  mutate(tre_rep = toupper(tre_rep)) %>%
+  mutate(day = case_when( timepoint == "t3" ~ 10,
+                          TRUE ~ 17
+                          )
+         ) %>%
+  as.data.table()
+
+#Reading in taxonomic annotation of reads
+taxonomy <- read_tsv("../data/eukulele_phylodb.tsv") %>%
+  select(-species) %>%
+  rename(species = "genus", genus = "family", family = "order", order = "class", class = "phylum", phylum = "kingdom") %>%
+  as.data.table()
+
+bbmap_p <- bbmap %>%
+  semi_join(taxonomy %>% filter(domain %in% c("Bacteria", "Archaea")), 
+            by = "orf") 
+```
+
+```{r}
+#| label: matrix_creation
+#| warning: false
+
+bbmap_p_mat <- bbmap_p %>%
+  select(orf, count, sample) %>%
+  spread(orf, count, fill = 0) %>%
+  column_to_rownames("sample") %>%
+  as.matrix()
+```
+
+# Diversity analysis
+
+Based on the rarefaction curve a lot of information is lost as compared to the most sequenced samples (@fig-rareCurve). However, this reduction is necessary to compare the diversity measurements across samples.
+```{r}
+#| label: fig-rareCurve
+#| fig-cap: Rarefaction curve of all samples.
+#| warning: false
+rarecurve(bbmap_p_mat, step = 200000, sample = min(rowSums(bbmap_p_mat)))
+```
+
+
+# Alpha diversity after rarefaction
+Rarefaction was performed on the raw count matrix, shannon-weaver diversity index was then used to estimate alpha diversity for all samples (@fig-alpha). Indeed there is a low diversity in the TN-treatment compared to the T and N treatments, but unexpectedly the lowest diversity was recorded in the C-treatment. This could potentially be explained by the thamuarchaeota expression which is high in teh C-treatment on sampling day 10.
+```{r}
+#| label: fig-alpha
+#| fig-cap: Alpha-diversity estimates per treatment and timepoint using the shannon-weaver index.
+#| warning: false
+
+rarefied <- rrarefy(bbmap_p_mat, sample = min(rowSums(bbmap_p_mat)))
+
+alpha <- diversity(rarefied, index ="shannon")
+
+alpha_grouped <- cbind(sample_ID, alpha)
+
+alpha_grouped %>%
+  ggplot(mapping = aes(x = treatment, y = alpha)) +
+  geom_point() +
+  facet_wrap(~ timepoint, ncol = 1) +
+  theme_minimal() +
+  coord_flip() +
+  xlab("Treatment") 
+```
+
+

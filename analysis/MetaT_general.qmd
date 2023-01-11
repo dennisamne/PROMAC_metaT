@@ -1,0 +1,74 @@
+---
+title: "The effect of temperature and nutrients on prokaryotic gene expression"
+author:
+  - name: Dennis Amnebrink
+    orcid: 0000-0002-2747-6346
+    email: dennis.amnebrink@lnu.se
+    affiliations:
+      - name: Centre for Ecology and Evolution in Microbial Model Systems – EEMiS, Linnaeus University, Kalmar, Sweden
+title-block-banner: true
+date: now
+editor: visual
+toc: true
+number-sections: true
+format:
+  html:
+     code-fold: true
+     default-image-extension: png
+---
+
+```{r}
+#| label: libraries
+#| warning: false
+
+library(tidyverse)
+library(kableExtra)
+```
+
+# Introduction of experimental setup
+
+A mesocosm experiment to investigate the effects of nutrients (yeast extract) and temperature on prokaryotic maintenance respiration, growth efficiency and other prokaryotic variables such as community composition and gene expression. The treatments were divided into a control (**C**) (1 °C, no nutrient addition), Temperature increase (**T**) (10°C, no nutrient addition), Nutrient addition (**N**) (1 °C, nutrients added), temperature and nutrient addition (**TN**) (10°C, nutrients added). The experiment was initiated on March 5th 2020, and concluded a month later on April 2nd, sampling was performed twice per week. Nutrient levels (TDP/TDN) were consistently high in the N-treatment, while they showed fluctuating patterns in the TN-treatment, with a steady increase from day 17 and on-wards (@fig-nuts). The C and T-treatments instead showed a gradual decline in nutrients, with a more rapid initial depletion in the T-treatment. DOC remained fairly constant throughout the mesocosm, with consistently higher DOC concentrations in the cold treatments (C, N), averages fluctuated between \~350 to \~375 µmol dm^-3^ (@fig-nuts). On days ten and seventeen a large range in microbial rate measurements, including bacterial abundance, growth and respiration was observed (@fig-bact_rates). Prokaryotic abundance was highest in the Temperature treatments (T, TN) reaching peak abundance on day seventeen, followed by a gradual decline and sharp decline in the T and TN treatment respectively, prokaryotic growth followed a similar pattern, while respiration maintained large differences between treatments throughout the period of day ten to seventeen. Motivated by this large range in rate measurements between treatments, days ten and seventeen were selected for further sequencing (and analysis) of microbial community gene expression, thus giving good conditions for investigating gene expression differences in response to combinations of different temperature and nutrient regimes.
+
+::: {#fig-rates_and_vars layout-ncol="2"}
+![nut_vars](../results/Variables1.png){#fig-nuts} ![bacterial_rates](../results/bacterial_rates3.png){#fig-bact_rates}
+
+Microbial rate measurements and nutrient concentrations throughout the period of experiment.
+:::
+
+## Dimensional reduction visualization of gene expression patterns
+
+**PCA visualization** derived from pairwise distances on normalized counts of eggNOGs revealed clear separation of functional expression, between both treatments and timepoints. Firstly, temperature appeared to separate treatments on the first PC-axis together with nutrients, while nutrients instead separated treatments along the secondary PC-axis. Furthermore, a temporal difference was seen as the different timepoints clustered separately within treatments, albeit with a larger variation in the NT-treatment due to one replicate. The functional expression remains comparably stable in the C-treatments as opposed to all other treatments, the largest successions are seen in the nutrient amended treatments (N, NT) (@fig-PCA).
+
+::: {#fig-PCA layout-ncol="2"}
+![eggNOG_old](../results/PCA_hellinger_eggNOGS.png){#fig-hej}
+
+![eggNOG_new](../results/PCA_hellinger_seed_eggNOG_orthologs.png)
+
+![taxonomic_PCA](../results/PCA_taxonomy.png)
+
+PCA's on functional and taxonomic expression
+:::
+
+Regardless of functional annotation, the clustering of treatments is highly congruent. Note that the **taxonomy of expression closely follows function** as seen in @fig-PCA. It is also worth to note that the separation of the TN-treatment from either T or N begs the question of **what is the main cause of the separation, either genes distinct from the other treatments, or a stronger expression of genes present in the treatments?**
+
+To further identify whether an interaction effect was seen, a PERMANOVA was run based on the 2x2 factorial setup to test for all possible combinations of the two factors (Temperature and nutrients) and their interaction: $nutrients*temp$.
+
+As seen in table @tbl-permanova not only did each factor have a significant effect, but the interaction effect was also significant, further corroborating the cluster positions of the treatments as seen in the @fig-PCA. This motivated an edgeR-analysis focusing on not only nutrient addition contrasts, but also the interaction effect as it is significant (albeit small), and begs the question are the differences seen in the TN treatment caused by different ratios of similar genes, or is the functional expression different? And how much of the total prokaryotic expression are the differentially expressed genes responsible for?
+
+```{r}
+#| label: tbl-permanova
+#| tbl-cap: Permanova Temperature and Nutrients on functional expression.
+kable(
+  read_tsv("../results/permanova_seed_eggNOG_ortholog.tsv")
+)
+```
+
+## Taxonomic profile of samples
+
+Taxonomically annotated gene expression on day ten and seventeen was dominated by Proteobacteria, in all treatments, while Thaumarchaeota was more prominent in the 1°C treatments (C,N), with a higher fraction on day ten as opposed to seventeen (@fig-orderTaxonomy). In general, the family composition stayed stable between treatments in both Thaumarchaeota and Alphaproteobacteria. Thaumarchaeota expression was represented mainly by the genus Nitrosopumilus. A small fraction of Thaumarchaeota expression was also attributed to the Cenarchaeaceae family. A higher expression of Bacteroidetes/Chlorobi group was observed in the N and TN-treatments, reaching peak abundance on day ten and seventeen in the N and TN treatment respectively. In the N-treatment this expression was explained mainly by Flavobacteriaceae, while in the TN treatment roughly 25% of Bacteroidetes/Chlorobi expression group was constituted by Cyclobacteriaceae at day 10, while flavobacterial expression became more dominant on day 17. The C-treatment showed a more diverse community, with Flavobacteria still being the most dominant family within the group, but with a higher persistence of Flammeovirgaceae and Bacteroidaceae. The proteobacterial expression was mainly explained by Alpha, Beta- and Gammaproteobacteria, with the highest fraction of Alphaproteobacteria in the T-treatment. Gammaproteobacteria was more common in the TN-treatment. Roughly half of the alphaproteobacterial expression was derived from Rhodobacteraceae and Surface 1-category, the latter being part of the SAR11-clade and constituted by unclassified bacteria and the genus Pelagibacter sp., together with unclassified families [Genus tpm table](https://drive.google.com/file/d/14GyTfcsnclFsETP_zlO0mA3wlusvWXlm/view?usp=sharing){#tbl-genusTpm}. The expression composition was similar across all treatments, with the tendency of higher expression by unknown Alphaproteobacteria at day 17 in the TN treatment. In Gammaproteobacteria, expression composition was markedly different in the N-treatment as more than 25% of expression was explained by Shewanellaceae at both timepoints. In the TN-treatment Oceanospirillaceae was prominent during day 10 while expression was more even during day 17. The C-treatment showed the most diverse expression composition with the larger groups comprising Environmental Gammaproteobacteria and NA.
+
+![Order level taxonomy](../results/taxonomy_order.png){#fig-orderTaxonomy}
+
+**Out of the 50 most abundant genes**, the majority were unidentified @fig-pheatmap. In common for all treatments was abundant expression of the flagellar motility gene *fliM*. This gene was also the most abundant gene in the TN treatment. Representative clusters formed, with clear differences between 10°C (C,N) and 1 C (T, TN) treatments. A suite of unknown genes were representative for the C and N-treatments, while the T and TN cluster included several annotated genes (fig-pheatmap). Among the annotated genes in the TN-treatment were *sufS* (produces L-alanine by removing sulfur from L-cysteine), *fabH* (involved in fatty acid synthesis) and ribosomal proteins (*rplJ*,*rpsQ*,*rpsP*). Furthermore, the most abundant KEGG-modules in the dataset included nitrification and denitrification, beta-oxidation, fatty acid biosynthesis and the Glyoxylate cycle among others Most abundant modules [table](https://drive.google.com/file/d/1PNMQ_lvCzwl4gzG6gis4K-Qm6UXreR_9/view?usp=sharing).
+
+![top50 pheatmap](../results/top50_both.png){#fig-pheatmap}
