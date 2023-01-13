@@ -88,13 +88,12 @@ bbmap_p <- bbmap %>%
 
 ## EdgeR test
 
-An edgeR test was run to compare the different contrasts of interest. The setup was done in a 2x2 factorial design with the variables temperature (1 and 10°C) and DOM (addition and no addition). The combination of these two factors produced four treatments:
-
-Cold_control (**C**), Cold_nutrient (**N**), Warm_control (**T**) , Warm_nutrient (**TN**). To investigate the effect of nutrient addition on microbial community gene expression at different temperature regimes, the contrasts compared are:\
+The separation of the TN treatment in the PCA (@fig-PCA) incited the question of whether this separation could partly be explained by an interaction effect between temperature and nutrients. To this end a permanova was performed following the 2x2 factorial design of temperature and nutrients. The test revealed significant effects of both temperature and nutrients alone, and the significant interaction effect, further corroborating the cluster positions seen in the PCA. To investigate the effect of nutrient addition on microbial community gene expression at different temperature regimes, the edgeR analysis included the following contrasts:\
 $N - C$\
 $TN - T$\
 $(TN - T) - (N - C)$\
-The last being the interaction effect between temperature and nutrients.
+The last being the interaction effect between temperature and nutrients.\
+Legend of letters: Cold_control (**C**), Cold_nutrient (**N**), Warm_control (**T**) , Warm_nutrient (**TN**).
 
 ```{r edgeR}
 #| label: edgeR
@@ -207,7 +206,7 @@ Comparing the responses of individual genes to nutrient addition at different te
 
 ![COG category responses](../results/contrasts_COG.png){#fig-contrasts}
 
-The treatments without nutrient additions had different categories that were upregulated (P in the C-treatment and "-" in the TN treatment), suggesting different gene repertoires being expressed between communities. Furthermore, the "-" means that many eggnogs were not belonging to any category, and shows a higher abundance of eggnogs without a COG-caterogy in the cold treatments (C,N) as compared to the warm treatments. It should be noted that the response of differentially expressed genes to nutrient addition was in general stronger in the NvsC contrast as compared to the TNvsT contrast in terms of ... . Although the communities are different, the 5 COG-categories that were most upregulated (tpm) in response to nutrient addition were the **same in both temperature regimes (J,S,C,E,I)**, showing a unified response regardless of different communities. On the other hand the G and T categories had a large difference in abundance ranking between the two nutrient responses, being more prominent in the CvsN-response as compared to the TN. In the TN-response M, K and O instead played a more important role.
+The treatments without nutrient additions had different categories that were upregulated (P in the C-treatment and "-" in the TN treatment), suggesting different gene repertoires being expressed between communities, and a set of genes that are more abundant in the lower nutrient treatments. Furthermore, the "-" means that many eggnogs were not belonging to any category, and shows a higher abundance of eggnogs without a COG-caterogy in the cold treatments (C,N) as compared to the warm treatments. It should be noted that the response of differentially expressed genes to nutrient addition was in general stronger in the NvsC contrast as compared to the TNvsT contrast in terms of ... . Although the communities are different, the 5 COG-categories that were most upregulated (tpm) in response to nutrient addition were the **same in both temperature regimes (J,S,C,E,I)**, showing a unified response regardless of different communities. On the other hand the G and T categories had a large difference in abundance ranking between the two nutrient responses, being more prominent in the CvsN-response as compared to the TN. In the TN-response M, K and O instead played a more important role.
 
 ## Interaction effect
 
