@@ -123,14 +123,18 @@ dgelist <- bbmap_p %>%
 #Creating contrasts
 my.contrasts <- makeContrasts(cold_nutrientvscold_control=cold_nutrient-cold_control,
                               warm_nutrientvswarm_control=warm_nutrient-warm_control,
+                              warm_controlvscold_control=warm_control-cold_control,
                               interaction=(warm_nutrient-warm_control) - (cold_nutrient-cold_control),
                               levels=design)
 
 
 #Creating contrasts
+
 qlf.NvsC <- glmQLFTest(dgelist, contrast=my.contrasts[,"cold_nutrientvscold_control"])
 
 qlf.TNvsT <- glmQLFTest(dgelist, contrast=my.contrasts[,"warm_nutrientvswarm_control"])
+
+qlf.TvsC <- glmQLFTest(dgelist, contrast=my.contrasts[,"warm_controlvscold_control"])
 
 qlf.interaction <- glmQLFTest(dgelist, contrast=my.contrasts[,"interaction"])
 
@@ -151,6 +155,13 @@ qlf.NvsC$table %>%
     as.data.frame() %>%
     rownames_to_column("seed_eggNOG_ortholog") %>%
     mutate(contrast = "interaction") %>%
+    as.data.frame()
+  ) %>%
+   bind_rows(
+    qlf.TvsC$table %>%
+    as.data.frame() %>%
+    rownames_to_column("seed_eggNOG_ortholog") %>%
+    mutate(contrast = "TvsC") %>%
     as.data.frame()
   ) %>%
   mutate(fdr = p.adjust(PValue, method = "fdr")) %>%
@@ -178,7 +189,44 @@ kable(contrasts %>%
   ungroup() %>%
   spread(contrast, n, fill = 0)) %>%
   kable_styling(bootstrap_options = c("striped", "hover")) %>%
-  add_header_above(c("EdgeR contrast overview" = 4), font_size = 18)
+  add_header_above(c("EdgeR contrast overview" = 5), font_size = 18)
+
+#Function to return tpm of upregulated genes in specified contrast and genes
+UpTpm <- function(Contrast, Treatment){
+ bbmap_p %>%
+  semi_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
+  inner_join(eggnogs, by = 'orf') %>%
+  group_by(seed_eggNOG_ortholog, sample) %>%
+  summarise(sum_tpm = sum(tpm), .groups = 'drop') %>%
+  ungroup() %>%
+  inner_join(sample_ID, by = "sample") %>%
+  filter(treatment %in% c(Treatment)) %>%
+  group_by(treatment, seed_eggNOG_ortholog) %>%
+  summarise(tpm = mean(sum_tpm)) %>%
+  ungroup() %>%
+  inner_join(contrasts %>% filter(contrast == Contrast) %>% select(seed_eggNOG_ortholog, type), by = "seed_eggNOG_ortholog") %>%
+  group_by(treatment, type) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  filter(treatment == Treatment & type == "Up") %>%
+  pull(tpm)
+}
+```
+
+```{r}
+#| label: tbl-edgeR_tpm_table
+#| warning: false
+#| tbl-cap: "Summary of EdgeR-output for each contrast compared, counting the tpm for up and downregulation"
+#| include: false
+
+#The order of values to match with the contrast table
+
+Up_vec <- c(paste0(UpTpm("NvsC","N")),
+  paste0(UpTpm("TNvsT","TN")),
+  paste0(UpTpm("TvsC","T"))
+)
+
+Up_vec
 ```
 
 It seems that there are quite some genes which are differentially expressed between the contrasts, but as a fraction they are not that many. The interaction effect focus should be on the upregulated part of genes, these are either higher or lower in the C and TN treatments, and are rather few. This is in line with the permanova which showed a weak (albeit significant) interaction effect. For the LogFC vs LOGCPM relationship of the genes, see @fig-contrast_plot.
@@ -207,6 +255,80 @@ Comparing the responses of individual genes to nutrient addition at different te
 ![COG category responses](../results/contrasts_COG.png){#fig-contrasts}
 
 The treatments without nutrient additions had different categories that were upregulated (P in the C-treatment and "-" in the TN treatment), suggesting different gene repertoires being expressed between communities, and a set of genes that are more abundant in the lower nutrient treatments. Furthermore, the "-" means that many eggnogs were not belonging to any category, and shows a higher abundance of eggnogs without a COG-caterogy in the cold treatments (C,N) as compared to the warm treatments. It should be noted that the response of differentially expressed genes to nutrient addition was in general stronger in the NvsC contrast as compared to the TNvsT contrast in terms of ... . Although the communities are different, the 5 COG-categories that were most upregulated (tpm) in response to nutrient addition were the **same in both temperature regimes (J,S,C,E,I)**, showing a unified response regardless of different communities. On the other hand the G and T categories had a large difference in abundance ranking between the two nutrient responses, being more prominent in the CvsN-response as compared to the TN. In the TN-response M, K and O instead played a more important role.
+
+## Rank-abundance of up and downregulated genes per contrast
+
+The next step was to identify the abundance of the + eggNOGs in the respective treatment and contrast, to understand if they were important in shaping community expression (on the assumption that abundance = importance). This was done by plotting the top100 genes in each treatment (@fig-rank_abundance_significant_genes). The first thing to note is that the slope between the most abundant + genes varies between contrasts. The highest slope is noted in the NvsC-contrast, where the tpm also stays above 50 for the lowest ranked eggNOG, while the subpanels then reach a steeper slope and lower abundance sequentially. 
+```{r}
+#| label: fig-rank_abundace_significant_genes
+#| fig-cap: "The tpm of + eggNOGs in each contrast. EggNOG names have been replaced with known protein names when possible, if unknown marked as '-'."
+#| fig-subcap: 
+#|   - "NvsC-contrast, tpm of + eggNOGs in the N-treatment."
+#|   - "TvsC-contrast, tpm of + eggNOGs in the T-treatment."
+#|   - "TNvsT-contrast, tpm of + eggNOGs in the T-treatment."
+#|   - "interaction-contrast, tpm of + eggNOGs in the treatments."
+#| warning: false
+#| cache: true
+
+#Function to return tpm per significant gene in specified contrast
+SigTpm <- function(Contrast, Treatment){
+ bbmap_p %>%
+  semi_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
+  inner_join(eggnogs, by = 'orf') %>%
+  group_by(seed_eggNOG_ortholog, sample) %>%
+  summarise(sum_tpm = sum(tpm), .groups = 'drop') %>%
+  ungroup() %>%
+  inner_join(sample_ID, by = "sample") %>%
+  filter(treatment %in% c(Treatment)) %>%
+  group_by(treatment, seed_eggNOG_ortholog) %>%
+  summarise(tpm = mean(sum_tpm)) %>%
+  ungroup() %>%
+  inner_join(contrasts %>% filter(contrast == Contrast) %>% select(seed_eggNOG_ortholog, type), by = "seed_eggNOG_ortholog") %>%
+  group_by(treatment, seed_eggNOG_ortholog, type) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  filter(treatment == Treatment & type == "Up") %>%
+    left_join(eggnogs %>% distinct(seed_eggNOG_ortholog, Preferred_name)) %>%
+  mutate(seed_eggNOG_ortholog = factor(seed_eggNOG_ortholog) %>% forcats::fct_reorder(tpm, .desc = TRUE)) %>%
+  mutate(Preferred_name = factor(Preferred_name) %>% forcats::fct_reorder(tpm, .desc = TRUE)) %>%
+  arrange(desc(tpm)) %>%
+  slice(1:100) %>%
+  mutate(name = ifelse(Preferred_name == "-", paste0("-",row_number()), paste0(Preferred_name, "-", row_number()))) %>% 
+  mutate(name = factor(name) %>% forcats::fct_reorder(tpm, .desc = TRUE)) 
+}
+
+
+SigTpm("NvsC", "N")  %>% #######
+  ggplot(mapping = aes(x = name, y = tpm)) +
+  geom_point() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 8)) +
+  ylim(0, 425)
+
+SigTpm("TvsC", "T")  %>% #######
+  ggplot(mapping = aes(x = name, y = tpm)) +
+  geom_point() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 8)) +
+  ylim(0, 425)
+
+SigTpm("TNvsT", "TN")  %>% #######
+  ggplot(mapping = aes(x = name, y = tpm)) +
+  geom_point() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 8)) +
+  ylim(0, 425)
+
+SigTpm("interaction", c("TN","T","N","C"))  %>% #######
+  ggplot(mapping = aes(x = name, y = tpm)) +
+  geom_point() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 8)) +
+  ylim(0, 425) +
+  facet_wrap(~ treatment)
+
+```
+
 
 ## Interaction effect
 
@@ -464,6 +586,7 @@ Before diving into the most diferentially expressed eNOGs, it is worthwile looki
 #|   - "NvsC contrast"
 #|   - "TNvsT contrast"
 #|   - "interaction contrast"
+#|   - "TvsC contrast"
 #| layout-ncol: 3
 #| warning: false
 
@@ -502,17 +625,30 @@ contrasts %>%
     #facet_wrap(~ contrast, ncol = 1, scales = "free") +
    theme_minimal() +
    theme(axis.text.x = element_text(hjust = 1, angle = 60)) 
+
+contrasts %>% 
+  filter(contrast == "TvsC") %>%
+  arrange(desc(logCPM)) %>%
+  slice(1:50) %>%
+  mutate(seed_eggNOG_ortholog = factor(seed_eggNOG_ortholog) %>% forcats::fct_reorder(logCPM, .desc = T)) %>%
+  ggplot(mapping = aes(x = seed_eggNOG_ortholog, y = logCPM, fill = type)) +
+   geom_col(aes(),position = "dodge") +
+    scale_fill_manual(values = TREAT_COLS) +
+    #facet_wrap(~ contrast, ncol = 1, scales = "free") +
+   theme_minimal() +
+   theme(axis.text.x = element_text(hjust = 1, angle = 60)) 
 ```
 
 Following this, the identity of the 50 most abundant upregulated eNOGS were compared between the different contrasts to identify similarity in function. For now it is just the enogs in (@fig-contrastComparisonEnogs). As the function key will be added once prokka is done (higher coverage of functions hopefully).
 
 ```{r}
 #| label: fig-contrastComparisonEnogs
-#| fig-cap: The most abundant upregulated genes in the three contrasts
+#| fig-cap: The most abundant + genes in the four contrasts
 #| fig-subcap: 
-#|   - "NvsC contrast upregulated genes"
-#|   - "TNvsT contrast upregulated genes"
-#|   - "Interaction contrast upregulated genes"
+#|   - "NvsC contrast + genes"
+#|   - "TNvsT contrast + genes"
+#|   - "Interaction contrast + genes"
+#|   - "TvsC contrast + genes"
 #| layout-ncol: 3
 #| warning: false
 
@@ -542,6 +678,18 @@ contrasts %>%
 
 contrasts %>% 
   filter(contrast == "interaction" & type == "Up") %>%
+  arrange(desc(logCPM)) %>%
+  slice(1:50) %>%
+  mutate(seed_eggNOG_ortholog = factor(seed_eggNOG_ortholog) %>% forcats::fct_reorder(logCPM, .desc = T)) %>%
+  ggplot(mapping = aes(x = seed_eggNOG_ortholog, y = logCPM, fill = type)) +
+   geom_col(aes(),position = "dodge") +
+    scale_fill_manual(values = TREAT_COLS) +
+    #facet_wrap(~ contrast, ncol = 1, scales = "free") +
+   theme_minimal() +
+   theme(axis.text.x = element_text(hjust = 1, angle = 60)) 
+
+contrasts %>% 
+  filter(contrast == "TvsC" & type == "Up") %>%
   arrange(desc(logCPM)) %>%
   slice(1:50) %>%
   mutate(seed_eggNOG_ortholog = factor(seed_eggNOG_ortholog) %>% forcats::fct_reorder(logCPM, .desc = T)) %>%
@@ -792,6 +940,7 @@ Finally, in a pedagogically backwards fashion. To elucidate if the shared genes 
 #|   - "NvsC contrast"
 #|   - "TNvsT contrast"
 #|   - "Interaction contrast"
+#|   - "TvsC contrast"
 #| layout-ncol: 3
 #| warning: false
 #Here the contrasts are loaded in again, so that the first edgeR-analysis is used, and not the one using expression distance vs DE.
@@ -857,6 +1006,23 @@ bbmap_p %>%
   theme_minimal() +
   facet_wrap( ~ treatment)
 
+bbmap_p %>%
+  semi_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
+  inner_join(eggnogs, by = 'orf') %>%
+  group_by(seed_eggNOG_ortholog, sample) %>%
+  summarise(sum_tpm = sum(tpm), .groups = 'drop') %>%
+  ungroup() %>%
+  inner_join(sample_ID, by = "sample") %>%
+  filter(treatment %in% c("T","C")) %>%
+  group_by(treatment, seed_eggNOG_ortholog) %>%
+  summarise(tpm = mean(sum_tpm)) %>%
+  ungroup() %>%
+  inner_join(contrasts %>% filter(contrast == "TvsC") %>% select(seed_eggNOG_ortholog, type), by = "seed_eggNOG_ortholog") %>%
+  group_by(treatment, type) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = type, y = tpm, fill = type)) +
+  geom_col(aes(), position = "dodge") +
+  theme_minimal() +
+  facet_wrap( ~ treatment)
 ```
-
-Would it be a good idea to combine this plot with the table of the output of number of genes (e.g Up/Down/non-DE) per contrast, and put their number in a parenthesis on the x-axis?
