@@ -11,6 +11,7 @@ number-sections: true
 format:
   html:
      code-fold: true
+     self-contained: true
 ---
 
 ```{r}
@@ -35,6 +36,7 @@ library(tidyverse)
 library(kableExtra)
 library(UpSetR)
 library(vegan)
+library(plotly)
 ```
 
 ```{r}
@@ -75,6 +77,8 @@ taxonomy <- read_tsv("../data/eukulele_phylodb.tsv") %>%
   select(-species) %>%
   rename(species = "genus", genus = "family", family = "order", order = "class", class = "phylum", phylum = "kingdom") %>%
   as.data.table()
+
+
 ```
 
 ```{r}
@@ -258,7 +262,8 @@ The treatments without nutrient additions had different categories that were upr
 
 ## Rank-abundance of up and downregulated genes per contrast
 
-The next step was to identify the abundance of the + eggNOGs in the respective treatment and contrast, to understand if they were important in shaping community expression (on the assumption that abundance = importance). This was done by plotting the top100 genes in each treatment (@fig-rank_abundance_significant_genes). The first thing to note is that the slope between the most abundant + genes varies between contrasts. The highest slope is noted in the NvsC-contrast, where the tpm also stays above 50 for the lowest ranked eggNOG, while the subpanels then reach a steeper slope and lower abundance sequentially. 
+The next step was to identify the abundance of the + eggNOGs in the respective treatment and contrast, to understand if they were important in shaping community expression (on the assumption that abundance = importance). This was done by plotting the top100 genes in each treatment (@fig-rank_abundance_significant_genes). The first thing to note is that the slope between the most abundant + genes varies between contrasts. The highest slope is noted in the NvsC-contrast, where the tpm also stays above 50 for the lowest ranked eggNOG, while the sub-panels then reach a steeper slope and lower abundance sequentially.
+
 ```{r}
 #| label: fig-rank_abundace_significant_genes
 #| fig-cap: "The tpm of + eggNOGs in each contrast. EggNOG names have been replaced with known protein names when possible, if unknown marked as '-'."
@@ -269,6 +274,10 @@ The next step was to identify the abundance of the + eggNOGs in the respective t
 #|   - "interaction-contrast, tpm of + eggNOGs in the treatments."
 #| warning: false
 #| cache: true
+
+ #Creating a weighted value of logFC * logCPM
+contrasts_weighted <- contrasts %>%
+  mutate(weighted = logFC*logCPM)
 
 #Function to return tpm per significant gene in specified contrast
 SigTpm <- function(Contrast, Treatment){
@@ -326,9 +335,454 @@ SigTpm("interaction", c("TN","T","N","C"))  %>% #######
   theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 8)) +
   ylim(0, 425) +
   facet_wrap(~ treatment)
+```
+
+Since the genenames are not that informative, a table with all the eggNOGs, and their annotation is found here @tbl-rank_abundance_significant_genes. A tip is to expand the table to be able to scroll it easy. To summarise the functional respone of these genes:\
+**The NvsC-contrast** contained transporters of various kinds (TRAP, sodium solute symporter), mobility related genes (*fliM*, *fliG*, *flaA*), ribosomal genes, fatty acid metabolism (*fadA*, *fadB* *fadE*), isocitrate lyase.
+
+**The TvsC-contrast** had an ammonium transporter (*amtB*), and a higher fraction of ribosomal proteins, an antenna protein (*pufB*) in bacteriochlorophyll. Lastly an arsenite oxidase was upregulated (*aoxA*).
+
+**The TNvsN-contrast** had a *pufB* gene, a gene in riboflavin biosynthesis *ribH*, and a gene involved in spermidine metabolism (*speE*).
+
+**The interaction-contrast** had *groSL*, several ribosomal proteins, a glutamate synthase (*gltB*).
+
+```{r}
+#| label: tbl-rank_abundance_significant_genes
+#| tbl-cap: "The gene annotation of the significant + genes in each fraction"
+#| warning: false
+#| cache: true
+
+#Trying to create the table with annotations for each specific contrast
+tab1 <- SigTpm("NvsC", "N") %>%
+  distinct(seed_eggNOG_ortholog, name) %>%
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog, best_og_desc), by = "seed_eggNOG_ortholog") %>%
+  mutate(contrast = "NvsC")
+
+tab2 <- SigTpm("TvsC", "T")  %>%
+  distinct(seed_eggNOG_ortholog, name) %>%
+inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog, best_og_desc), by = "seed_eggNOG_ortholog") %>%
+  mutate(contrast = "TvsC")
+
+tab3 <- SigTpm("TNvsT", "TN")  %>% #######
+distinct(seed_eggNOG_ortholog, name) %>%
+inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog, best_og_desc), by = "seed_eggNOG_ortholog") %>%
+  mutate(contrast = "TNvsN")
+
+tab4 <- SigTpm("interaction", c("TN","T","N","C"))  %>% #######
+  distinct(seed_eggNOG_ortholog, name) %>%
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog, best_og_desc), by = "seed_eggNOG_ortholog") %>%
+  mutate(contrast = "interaction")
+
+DT::datatable(
+  tab1 %>%
+  bind_rows(tab2) %>%
+  bind_rows(tab3) %>%
+  bind_rows(tab4), filter = 'top', options = list(scrollY = "200px")
+  ) %>% DT::formatStyle(columns = colnames(df), fontSize = '100%')
+```
+
+Another pertinent question to answer is whether the taxonomy of the differentially expressed genes may can be attributed to the large scale taxonomic patterns seen in @fig-orderTaxonomy. Thus it could be expected that the upregulated genes in the NvsC-contrast should be attributed to the Thaumarchaeota, while in the TN-T contrast instead Burkholderiales and Oceanospirillales could be potential actors of these elevated relative eggNOG-abundances. 
+**The NvsC-contrast** Interestingly, while Thaumarchaerota is among the larger players in the N-treatment, the + eggNOGs are explained by (in order of prominence) Altermonadales, Flavobacteriales, Campylbacterales and Burkholderiales. While the - genes are instead dominated by Thaumarchaeota in the C-treatment. In contrast, the upregulated genes in the **TvsC-contrast** were explained by Oceanospirillales, Burkholderiales and Alteromonadales (in order of promincence), the C-treatment - eggNOGs were still dominated by Thaumarchaeota. Unexpectedly the Thaumarchaeal expression was also dominating the DE genes in the T treatment as seen in the **TNvsT-contrast**, the + eggNOGs in the TN-treatment was expressed by Oceanospirillales, Rhodobacterales and Alteromonadales. 
+The **interaction-contrast** shows that the archaea (both Thaumarchaeota and Cenarchaeales) are the largest group affected by the interaction-effect, and to some extent Burkholderiales and Alteromonadales.
+
+```{r}
+#| label: fig-DEGenes_taxonomy
+#| fig-cap: "The summarised tpm of all + and - eggNOGs in each contrast by taxonomy."
+#| fig-subcap: 
+#|   - "NvsC-contrast."
+#|   - "TvsC-contrast."
+#|   - "TNvsT-contrast."
+#|   - "interaction-contrast."
+#| warning: false
+#| cache: true
+
+
+#Creating function for plotting this
+
+
+DETaxPlot <- function(Treatment, Contrast) {
+  bbmap_p %>%
+  inner_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
+  inner_join(eggnogs, by = 'orf') %>%
+  inner_join(contrasts %>% filter(contrast == Contrast & type %in% c("Up","Down")), by = "seed_eggNOG_ortholog") %>%
+  inner_join(taxonomy, by = "orf") %>%
+  filter(treatment %in% c(Treatment)) %>%
+  group_by(type, sample, order) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(type, treatment, order) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup()
+}
+#NvsC-contrast
+plotNvsC <- DETaxPlot(c("N","C"), "NvsC") %>%
+   mutate(order = fct_reorder(order, tpm, .fun='median')) %>%
+ggplot(mapping = aes(x = order, y = tpm, fill = type)) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  coord_flip()
+
+ggplotly(plotNvsC)
+
+#TvsC-contrast
+plotTvsC <- DETaxPlot(c("T","C"), "TvsC") %>%
+ggplot(mapping = aes(x = order, y = tpm, fill = type)) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  coord_flip()
+
+ggplotly(plotTvsC)
+
+#TNvsT-contrast
+plotTNvsT <- DETaxPlot(c("TN","T"), "TNvsT") %>%
+ggplot(mapping = aes(x = order, y = tpm, fill = type)) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  coord_flip()
+
+ggplotly(plotTNvsT)
+
+#interaction-contrast
+plotInteraction <- DETaxPlot(c("C","N","T","TN"), "interaction") %>%
+ggplot(mapping = aes(x = order, y = tpm, fill = type)) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) 
+
+ggplotly(plotInteraction)
+  
+```
+
+##Plotting the taxa tpm as dotplots and each plot two treatments
+```{r}
+#Below a 1000 tpm filter, the major clades are retained, including Campylobacterales, Thaumarcheaeota, Burkholderiales, Altermonadales, Rhizobiales, Rhodobacterales, Flavobacterales, SAR 11 clade
+
+
+#Covers methylophilales and Oceanospirillales on top of already known taxa, so nice to add.
+DETaxPlot(c("T","C"), "TvsC") %>%
+   mutate(order = fct_reorder(order, tpm, .fun='median')) %>%
+  filter(tpm >= 1000) %>% #
+  ggplot(mapping = aes(x = order, y = treatment, size = tpm)) +
+    geom_point() +
+    coord_flip() +
+    theme_minimal()
+
+#Adds Rhodobacterales and Cenarchaeales
+DETaxPlot(c("TN","T"), "TNvsT") %>%
+   mutate(order = fct_reorder(order, tpm, .fun='median')) %>%
+  filter(tpm >= 1000) %>% #
+  ggplot(mapping = aes(x = order, y = treatment, size = tpm)) +
+    geom_point() +
+    coord_flip() +
+    theme_minimal()
+
+#Unique elements of taxa contributing more than 1000 tpm in both treatments for eachh contrast gives 12 unique families if NA is remmoved.
+toporder <- 
+  c(
+  DETaxPlot(c("N","C"), "NvsC") %>%
+  group_by(order) %>%
+  summarise(tpm = sum(tpm)) %>%
+  filter(tpm >= 1000) %>%
+  ungroup() %>%
+  distinct(order) %>%
+  pull(order),
+  DETaxPlot(c("T","C"), "TvsC") %>%
+  group_by(order) %>%
+  summarise(tpm = sum(tpm)) %>%
+  filter(tpm >= 1000) %>%
+  ungroup() %>%
+  distinct(order) %>%
+  pull(order),
+  DETaxPlot(c("TN","T"), "TNvsT") %>%
+   group_by(order) %>%
+  summarise(tpm = sum(tpm)) %>%
+  filter(tpm >= 1000) %>%
+  ungroup() %>%
+  distinct(order) %>%
+  pull(order)
+)
+
+toporders <- unique(toporder)[-10]  #Removing the NA category
+
+#Plotting the relevant families and setting their order, this works, now harmonize scale
+
+p1 <- DETaxPlot(c("N","C"), "NvsC") %>%
+  filter(order %in% toporders) %>%
+  mutate(order = factor(order, levels = rev(toporders))) %>%
+    ggplot(mapping = aes(x = order, y = treatment, size = tpm)) +
+    geom_point() +
+    coord_flip() +
+    theme_minimal() +
+    scale_x_discrete(drop=F) +# new line added here
+    scale_size_continuous(limits=c(0,50000)) +
+  theme(legend.position = "none") +
+  ylab("")
+
+p2 <- DETaxPlot(c("T","C"), "TvsC") %>%
+  filter(order %in% toporders) %>%
+   mutate(order = factor(order, levels = rev(toporders))) %>%
+    ggplot(mapping = aes(x = order, y = treatment, size = tpm)) +
+    geom_point() +
+    coord_flip() +
+    theme_minimal() +
+   scale_x_discrete(drop=F) +# new line added here
+  scale_size_continuous(limits=c(0,50000)) +
+  theme(axis.text.y = element_blank(), legend.position = "none") +
+  xlab("") + 
+  ylab("")
+
+p3 <- DETaxPlot(c("TN","T"), "TNvsT") %>%
+  filter(order %in% toporders) %>%
+   mutate(order = factor(order, levels = rev(toporders))) %>%
+    ggplot(mapping = aes(x = order, y = treatment, size = tpm)) +
+    geom_point() +
+    coord_flip() +
+    theme_minimal() +
+   scale_x_discrete(drop=F) +# new line added here
+    scale_size_continuous(limits=c(0,50000)) +
+  theme(axis.text.y = element_blank()) +
+  xlab("") +
+  ylab("")
+
+panel_a <- p1 + p2 + p3 
+
+ggsave("../results/DE_genes_taxonomy_tpm.pdf")
 
 ```
 
+##Plotting the KEGG level 2 tpm as dotplots and each plot two treatments 
+```{r}
+#| label: pathway level 2 summary vectors
+#Summarising the larger KEGG categories accordign to their structure in https://www.genome.jp/kegg/pathway.html I did leave out the 1.0 category global and overview maps, as it is so wide!
+
+Global_and_overview_maps <- c("01100","01110","01120","01200","01210","01212","01230","01232","01250","01240","01220")
+
+Carbohydrate_metabolism <- c("00010","00020","00030","00040","00051","00052","00053","00500","00520","00620","00630","00640","00650","00660","00562")
+
+Energy_metabolism <- c("00190","00195","00196","00710","00720","00680","00910","00920")
+
+Lipid_metabolism <- c("00061","00062","00071","00072","00073","00100","00120","00121","00140","00561","00564","00565","00600","00590","00591","00592","01040")
+
+Nucleotide_metabolism <- c("00230", "00240") 
+
+Amino_acid_metabolism<- c("00250","00260","00270","00280","00290","00300","00310","00220","00330","00340","00350","00360","00380","00400")
+
+Metabolism_of_other_amino_acids<- c("00410","00430","00440","00450","00460","00471","00472","00473","00480")
+
+Glycan_biosynthesis_and_metabolism <- c("00510","00513","00512","00515","00514","00532","00534","00533","00531","00563","00601","00603","00604","00540","00541","00550","00511","00571","00572")
+
+Metabolism_of_cofactors_and_vitamins<- c("00730","00740","00750","00760","00770","00780","00785","00790","00670","00830","00860","00130")
+
+Metabolism_of_terpenoids_and_polyketides<- c("00900","00902","00909","00904","00906","00905","00981","00908","00903","00281","01052","00522","01051","01059","01056","01057","00253","00523","01054","01053","01055")
+
+Biosynthesis_of_other_secondary_metabolites <- c("00940","00945","00941","00944","00942","00943","00901","00403","00950","00960","01058","00232","00965","00966","00402","00311","00332","00261","00331","00521","00524","00525","00401","00404","00405","00333","00254","00999","00998","00997")
+
+Xenobiotics_biodegradation_and_metabolism <- c("00362","00627","00364","00625","00361","00623","00622","00633","00642","00643","00791","00930","00363","00621","00626","00624","00365","00984","00980","00982","00983")
+
+Chemical_structure_transformation_maps <- c("01010","01060","01061","01062","01063","01064","01065","01066","01070")
+
+Transcription <- 
+  c("03020","03022", "03040")
+
+Translation <-
+  c("03010","00970","03013","03015","03008")
+ 
+Folding_sorting_and_degradation <-
+  c("03060","04141","04130","04120","04122","03050","03018")
+
+Replication_and_repair <- 
+  c("03030","03410","03420","03430","03440","03450","03460")
+
+ #This category is removed from the categorie-vector due to no hits at all among the DE-genes
+Information_processing_in_viruses <-
+   c("03230","03240","03250","03260","03262","03261","03263","03264","03265","03266","03268","03267")
+ 
+ Membrane_transport <-
+   c("02010","02060","03070")
+ 
+ Signal_transduction <- 
+   c("02020","04010","04013","04016","04011","04012","04014","04015","04310","04330","04340","04341","04350", "04390","04391","04392","04370","04371","04630","04064","04668","04066","04068","04020","04070","04072","04071","04024","04022","04151","04152","04150","04075")
+
+categories <- c("Carbohydrate_metabolism", "Energy_metabolism", "Lipid_metabolism", "Nucleotide_metabolism", "Amino_acid_metabolism", "Metabolism_of_other_amino_acids", "Glycan_biosynthesis_and_metabolism", "Metabolism_of_cofactors_and_vitamins", "Metabolism_of_terpenoids_and_polyketides", "Biosynthesis_of_other_secondary_metabolites", "Xenobiotics_biodegradation_and_metabolism", "Chemical_structure_transformation_maps", "Transcription","Translation","Folding_sorting_and_degradation","Replication_and_repair", "Membrane_transport","Signal_transduction")
+```
+
+```{r}
+#Function for plotting most abundant kegg level 2 paths.
+DEFuncPlot <- function(Treatment, Contrast) {
+  bbmap_p %>%
+  inner_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
+  inner_join(eggnogs, by = 'orf') %>%
+  inner_join(contrasts %>% filter(contrast == Contrast & type %in% c("Up","Down")), by = "seed_eggNOG_ortholog") %>%
+  filter(treatment %in% Treatment) %>%
+  separate_rows(KEGG_Pathway, sep = ",") %>%
+  mutate(KEGG_Pathway = gsub("^[a-z]*", "", KEGG_Pathway)) %>% #Removing prefix on pathway to match vectors
+  distinct(treatment, orf, seed_eggNOG_ortholog, tpm, count, replicate,KEGG_Pathway, type, sample) %>% #Removing duplicates due to KO and MAP PREFIXES
+  mutate(KEGG_level_2 = case_when(
+    KEGG_Pathway %in% Carbohydrate_metabolism ~ "Carbohydrate_metabolism",
+    KEGG_Pathway %in% Energy_metabolism ~ "Energy_metabolism",
+    KEGG_Pathway %in% Lipid_metabolism ~ "Lipid_metabolism",
+    KEGG_Pathway %in% Nucleotide_metabolism ~ "Nucleotide_metabolism",
+    KEGG_Pathway %in% Amino_acid_metabolism ~ "Amino_acid_metabolism",
+    KEGG_Pathway %in% Metabolism_of_other_amino_acids ~ "Metabolism_of_other_amino_acids",
+    KEGG_Pathway %in% Glycan_biosynthesis_and_metabolism ~ "Glycan_biosynthesis_and_metabolism",
+    KEGG_Pathway %in% Metabolism_of_cofactors_and_vitamins ~ "Metabolism_of_cofactors_and_vitamins",
+    KEGG_Pathway %in% Metabolism_of_terpenoids_and_polyketides ~ "Metabolism_of_terpenoids_and_polyketides",
+    KEGG_Pathway %in% Biosynthesis_of_other_secondary_metabolites ~ "Biosynthesis_of_other_secondary_metabolites",
+    KEGG_Pathway %in% Xenobiotics_biodegradation_and_metabolism ~ "Xenobiotics_biodegradation_and_metabolism",
+    KEGG_Pathway %in% Chemical_structure_transformation_maps ~ "Chemical_structure_transformation_maps",
+    KEGG_Pathway %in% Transcription ~ "Transcription",
+    KEGG_Pathway %in% Translation ~ "Translation",
+    KEGG_Pathway %in% Folding_sorting_and_degradation ~ "Folding_sorting_and_degradation",
+    KEGG_Pathway %in% Replication_and_repair ~ "Replication_and_repair",
+    #KEGG_Pathway %in% Information_processing_in_viruses ~ "Information_processing_in_viruses",
+    KEGG_Pathway %in% Membrane_transport ~ "Membrane_transport",
+    KEGG_Pathway %in% Signal_transduction ~ "Signal_transduction" #Not adding a last line here gives all PW's not present NA's.
+  )) %>% 
+  filter(!is.na(KEGG_level_2)) %>%
+  group_by(sample, KEGG_level_2) %>% # We do not care about type, only significance, so summarised here.
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(treatment, KEGG_level_2) %>%
+  summarise(tpm = mean(tpm)) %>% # mean tpm per treatment for allreplicates
+  ungroup() %>%
+  mutate(KEGG_level_2 = factor(KEGG_level_2, levels = rev(categories))) 
+}
+
+
+#Replication??
+p4 <- DEFuncPlot(c("N","C"), "NvsC") %>%
+  ggplot(mapping = aes(x = KEGG_level_2, y = treatment, size = tpm)) +
+    geom_point() +
+    coord_flip() +
+    theme_minimal() +
+    scale_x_discrete(drop=F) +
+  scale_size_continuous(limits=c(0,17000)) +
+  theme(legend.position = "none") +
+  ylab("")
+
+p5 <- DEFuncPlot(c("T","C"), "TvsC") %>%
+  ggplot(mapping = aes(x = KEGG_level_2, y = treatment, size = tpm)) +
+    geom_point() +
+    coord_flip() +
+    theme_minimal() +
+    scale_x_discrete(drop=F) +
+    scale_size_continuous(limits=c(0,17000)) +
+   theme(axis.text.y = element_blank(), legend.position = "none") +
+  xlab("")
+
+p6 <- DEFuncPlot(c("TN","T"), "TNvsT") %>%
+  ggplot(mapping = aes(x = KEGG_level_2, y = treatment, size = tpm)) +
+    geom_point() +
+    coord_flip() +
+    theme_minimal() +
+    scale_x_discrete(drop=F) +
+    scale_size_continuous(limits=c(0,17000)) +
+   theme(axis.text.y = element_blank()) +
+  xlab("") +
+  ylab("")
+
+p4 + p5 + p6
+
+ggsave("../results/DEGenes_KEGG_level_2_tpm.pdf")
+
+panel_b <- p4 + p5 + p6
+
+p1 + p2 + p3  + p4 + p5 + p6 
+
+ggsave("../results/DEGenes_tax_KEGG_level_2.pdf")
+```
+
+
+## Here, talk about most abundant modules in key taxa (e.g Archaea, Burkholderiales, Alteromonadales, Oceanospirillales )
+```{r}
+
+```
+
+
+## What modules does the DE-genes belong to? Good way to summarise
+
+**NvsC** The two most abundant upregulated KEGG_modules (M00178 & M00179) do not have an entry in KEGG. However, the third M00012 is the Glyoxylate cycle followed by Beta-oxidation (M00087), TCA-cycle (M00009), reductive citrate cycle (M00173), and F-type ATPase (M00157).
+
+**TvsC** The response in the TvsC-contrast revealed a similar upregulated pattern in the T-treatment as in the N-treatment in the NvsC-treatment, with modules M00178 & M00179 being highest, followed by F-type ATPase (M00157) and the TCA-cycle (M00009).However, the downregulated eggNOGS produced more abundant KEGG-modules in the C-treatment, as opposed to the NvsC contrast. The three most abundant modules were Compete nitrification (M00804), Nitrification ammonia =\> nitrite (M00528) and methane oxidation (M00174), this pathway is likely explained by a misidentified ammonia monooxygenase. (These results match the old KO-term analysis very well.)
+
+**TNvsT** M00179 & M00179 was the most upregulated in the TN-contrast. Followed by TCA-cycle (M0009),Citrate cycle, second carbon oxidation, 2-oxoglutarate =\> oxaloacetate (M00011), Reductive citrate cycle (Arnon-Buchanan cycle) (M00173), Dicarboxylate-hydroxybutyrate cycle (M00374). While in the T-treatment the most abundant modules were M00178 (No-entry), Denitrification, nitrate =\> nitrogen (M00529), No entry (M00179), No entry (M00222), Methane oxidation, methanotroph, methane =\> formaldehyde (M00174),Nitrification, ammonia =\> nitrite (M00528), Complete nitrification, comammox, ammonia =\> nitrite =\> nitrate (M00804)
+
+**Interaction**
+
+```{r}
+#| label: fig-DEGenes_modules
+#| fig-cap: "The summarised tpm of all + and - eggNOGs in each contrast by module"
+#| fig-subcap: 
+#|   - "NvsC-contrast."
+#|   - "TvsC-contrast."
+#|   - "TNvsT-contrast."
+#|   - "interaction-contrast."
+#| warning: false
+#| cache: true
+
+ 
+plot1 <- bbmap_p %>%
+  inner_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
+  inner_join(eggnogs, by = 'orf') %>%
+  inner_join(contrasts %>% filter(contrast == "NvsC" & type %in% c("Up","Down")), by = "seed_eggNOG_ortholog") %>%
+  filter(treatment %in% c("C","N")) %>%
+  separate_rows(KEGG_Module, sep = ",") %>%
+  filter(KEGG_Module != "-") %>%
+  group_by(type, sample, KEGG_Module) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(type, KEGG_Module, treatment) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x =KEGG_Module, y = tpm, fill = type)) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+
+DEModulePlot <- function(Treatment, Contrast) {
+  bbmap_p %>%
+  inner_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
+  inner_join(eggnogs, by = 'orf') %>%
+  inner_join(contrasts %>% filter(contrast == Contrast & type %in% c("Up","Down")), by = "seed_eggNOG_ortholog") %>%
+  filter(treatment %in% c(Treatment)) %>%
+  separate_rows(KEGG_Module, sep = ",") %>%
+  filter(KEGG_Module != "-") %>%
+  group_by(type, sample, KEGG_Module) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(type, treatment, KEGG_Module) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x =KEGG_Module, y = tpm, fill = type)) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+}
+
+#NvsC-plot
+DEModulePlot(c("N","C"), "NvsC") %>%
+  ggplotly()
+
+#TvsC-plot
+DEModulePlot(c("T","C"), "TvsC") %>%
+  ggplotly()
+
+#TNvsT-plot
+DEModulePlot(c("TN","T"), "TNvsT") %>%
+  ggplotly()
+
+#Interaction-plot
+DEModulePlot(c("TN","T","C","N"), "interaction") %>%
+  ggplotly()
+```
 
 ## Interaction effect
 
@@ -639,7 +1093,7 @@ contrasts %>%
    theme(axis.text.x = element_text(hjust = 1, angle = 60)) 
 ```
 
-Following this, the identity of the 50 most abundant upregulated eNOGS were compared between the different contrasts to identify similarity in function. For now it is just the enogs in (@fig-contrastComparisonEnogs). As the function key will be added once prokka is done (higher coverage of functions hopefully).
+Following this, the identity of the 50 most abundant upregulated eNOGS were compared between the different contrasts to identify similarity in function. For now it is just the enogs in (@fig-contrastComparisonEnogs). 
 
 ```{r}
 #| label: fig-contrastComparisonEnogs
@@ -742,6 +1196,7 @@ To further put @fig-shared_enogs into perspective, it is trying to convey that t
 #| label: ComDistVsDEGenesPreparation
 #| warning: false
 #| output: false
+#| include: false
 
 #In this chunk, plot distances between contrasts and compare the number of DE-genes, should show a positive relationship. The-DE gene analysis is done again, and fdr values recalculated, then everything is plotted against the DE-gene numbers. Ask Daniel if this is the way to go, or if this should be done in the original DE-gene analysis and, if so this will inflate the family-wise error. Do the comparison only for day 10, as performed in the DE-tests.
 
@@ -893,6 +1348,7 @@ cor.test(distDE_df$value, distDE_df$n, method = "pearson")
 #|   - "Community distance vs fraction of Differentially expressed genes. Slope represents the slope-coefficient from the fitted linear model."
 #| layout-ncol: 2
 #| warning: false
+#| include: false
 
 #IT IS DONE, EUREKA!!
 distDE_df %>%
