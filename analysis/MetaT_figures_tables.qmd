@@ -1103,6 +1103,232 @@ fisher_df %>%
 
 ## Nested taxonomy plots
 ```{r}
+#### Burkholderiales
+top12 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(timepoint, treatment, orf) %>% # mean tpm per orf and treatment and timepoint
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(order == "Burkholderiales") %>%
+  mutate(order_coa = coalesce(species, genus, family, order)) %>% #Filling from genus and upwards
+  group_by(order_coa) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:11) %>%
+  pull(order_coa)
 
+p1 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(treatment,timepoint,orf) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(order == "Burkholderiales") %>%
+  mutate(order_coa = coalesce(species, genus, family, order)) %>%
+  mutate(Group = ifelse(order_coa %in% top12, paste0(order_coa), "Other")) %>%
+  mutate(Group = case_when(Group %in% species ~ paste0("s_",Group),
+                                         Group %in% genus ~ paste0("g_",Group),
+                                         Group %in% family ~ paste0("f_",Group),
+                                         Group %in% order ~ paste0("o_",Group),
+                                         TRUE ~ Group)) %>%
+  group_by(treatment, timepoint, Group) %>% #Summarising mean tpm per timepoint and treatment per group
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  group_by(treatment, timepoint) %>%
+  mutate(relab = tpm/sum(tpm)) %>%  #Making the abundance relative within the group for comparisons
+  ungroup() %>%
+  mutate(Day = case_when(timepoint == "t3" ~ "10",
+                               TRUE ~ "17")) %>%
+  ggplot(mapping = aes(x= Day, y = relab, fill = fct_relevel(Group, "Other", after = 12))) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(size = 7, colour = "black"),
+        axis.title.x = element_text(size = 7, colour = "black", face = "bold"),
+        axis.text.y = element_text(size = 7, colour = "black"),
+        axis.title.y = element_text(size = 7, colour = "black", face = "bold"),
+        panel.background = element_blank(),
+        legend.text = element_text(size = 7, colour = "black"),
+        legend.title = element_text(size = 7, colour = "black", face = "bold"),
+        strip.text = element_text(size = 7, colour = "black", face = "bold"),
+        strip.background = element_blank()) +
+  scale_fill_manual('Taxonomic group', values = GEOM_COL_COLOURS) +
+  ylab("Relative abundance") +
+  xlab("Day")
+
+####### Thaumarchaeaota
+
+top12 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(timepoint, treatment, orf) %>% # mean tpm per orf and treatment and timepoint
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(phylum == "Thaumarchaeota") %>%
+  mutate(order_coa = coalesce(genus, family, order, class, phylum)) %>% #Filling from genus and upwards
+  group_by(order_coa) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:11) %>%
+  pull(order_coa)
+
+p2 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(treatment,timepoint,orf) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(phylum == "Thaumarchaeota") %>%
+  mutate(order_coa = coalesce(genus, family, order, class, phylum)) %>%
+  mutate(Group = ifelse(order_coa %in% top12, paste0(order_coa), "Other")) %>%
+  mutate(Group = case_when(Group %in% genus ~ paste0("g_",Group),
+                                         Group %in% family ~ paste0("f_",Group),
+                                         Group %in% order ~ paste0("o_",Group),
+                                         Group %in% class ~ paste0("c_",Group),
+                                         Group %in% phylum ~ paste0("p_",Group),
+                                         TRUE ~ Group)) %>%
+  group_by(treatment, timepoint, Group) %>% #Summarising mean tpm per timepoint and treatment per group
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  group_by(treatment, timepoint) %>%
+  mutate(relab = tpm/sum(tpm)) %>%  #Making the abundance relative within the group for comparisons
+  ungroup() %>%
+  mutate(Day = case_when(timepoint == "t3" ~ "10",
+                               TRUE ~ "17")) %>%
+  #mutate(Group = fct_recode(Group, P_Thaumarchaeota = "Thaumarchaeota", C_Gammaproteobacteria = "Gammaproteobacteria")) %>%
+  ggplot(mapping = aes(x= Day, y = relab, fill = fct_relevel(Group, "Other", after = 12))) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(size = 7, colour = "black"),
+        axis.title.x = element_text(size = 7, colour = "black", face = "bold"),
+        axis.text.y = element_text(size = 7, colour = "black"),
+        axis.title.y = element_text(size = 7, colour = "black", face = "bold"),
+        panel.background = element_blank(),
+        legend.text = element_text(size = 7, colour = "black"),
+        legend.title = element_text(size = 7, colour = "black", face = "bold"),
+        strip.text = element_text(size = 7, colour = "black", face = "bold"),
+        strip.background = element_blank()) +
+  scale_fill_manual('Taxonomic group', values = GEOM_COL_COLOURS) +
+  ylab("Relative abundance") +
+  xlab("Day")
+
+
+######### Oceranospirillales
+top12 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(timepoint, treatment, orf) %>% # mean tpm per orf and treatment and timepoint
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(order == "Oceanospirillales") %>%
+  mutate(order_coa = coalesce(species, genus, family, order)) %>% #Filling from genus and upwards
+  group_by(order_coa) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:11) %>%
+  pull(order_coa)
+
+p3 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(treatment,timepoint,orf) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(order == "Oceanospirillales") %>%
+  mutate(order_coa = coalesce(species, genus, family, order)) %>%
+  mutate(Group = ifelse(order_coa %in% top12, paste0(order_coa), "Other")) %>%
+  mutate(Group = case_when(Group %in% species ~ paste0("s_",Group),
+                                         Group %in% genus ~ paste0("g_",Group),
+                                         Group %in% family ~ paste0("f_",Group),
+                                         Group %in% order ~ paste0("o_",Group),
+                                         TRUE ~ Group)) %>%
+  group_by(treatment, timepoint, Group) %>% #Summarising mean tpm per timepoint and treatment per group
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  group_by(treatment, timepoint) %>%
+  mutate(relab = tpm/sum(tpm)) %>%  #Making the abundance relative within the group for comparisons
+  ungroup() %>%
+  mutate(Day = case_when(timepoint == "t3" ~ "10",
+                               TRUE ~ "17")) %>%
+  ggplot(mapping = aes(x= Day, y = relab, fill = fct_relevel(Group, "Other", after = 12))) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(size = 7, colour = "black"),
+        axis.title.x = element_text(size = 7, colour = "black", face = "bold"),
+        axis.text.y = element_text(size = 7, colour = "black"),
+        axis.title.y = element_text(size = 7, colour = "black", face = "bold"),
+        panel.background = element_blank(),
+        legend.text = element_text(size = 7, colour = "black"),
+        legend.title = element_text(size = 7, colour = "black", face = "bold"),
+        strip.text = element_text(size = 7, colour = "black", face = "bold"),
+        strip.background = element_blank()) +
+  scale_fill_manual('Taxonomic group', values = GEOM_COL_COLOURS) +
+  ylab("Relative abundance") +
+  xlab("Day")
+
+
+######### Alteromonadales
+top12 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(timepoint, treatment, orf) %>% # mean tpm per orf and treatment and timepoint
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(order == "Alteromonadales") %>%
+  mutate(order_coa = coalesce(species, genus, family, order)) %>% #Filling from genus and upwards
+  group_by(order_coa) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:11) %>%
+  pull(order_coa)
+
+p4 <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(treatment,timepoint,orf) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(taxonomy, by= "orf") %>%
+  filter(order == "Alteromonadales") %>%
+  mutate(order_coa = coalesce(species, genus, family, order)) %>%
+  mutate(Group = ifelse(order_coa %in% top12, paste0(order_coa), "Other")) %>%
+  mutate(Group = case_when(Group %in% species ~ paste0("s_",Group),
+                                         Group %in% genus ~ paste0("g_",Group),
+                                         Group %in% family ~ paste0("f_",Group),
+                                         Group %in% order ~ paste0("o_",Group),
+                                         TRUE ~ Group)) %>%
+  group_by(treatment, timepoint, Group) %>% #Summarising mean tpm per timepoint and treatment per group
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  group_by(treatment, timepoint) %>%
+  mutate(relab = tpm/sum(tpm)) %>%  #Making the abundance relative within the group for comparisons
+  ungroup() %>%
+  mutate(Day = case_when(timepoint == "t3" ~ "10",
+                               TRUE ~ "17")) %>%
+  ggplot(mapping = aes(x= Day, y = relab, fill = fct_relevel(Group, "Other", after = 12))) +
+  geom_col() +
+  facet_wrap(~ treatment) +
+  theme(axis.text.x = element_text(size = 7, colour = "black"),
+        axis.title.x = element_text(size = 7, colour = "black", face = "bold"),
+        axis.text.y = element_text(size = 7, colour = "black"),
+        axis.title.y = element_text(size = 7, colour = "black", face = "bold"),
+        panel.background = element_blank(),
+        legend.text = element_text(size = 7, colour = "black"),
+        legend.title = element_text(size = 7, colour = "black", face = "bold"),
+        strip.text = element_text(size = 7, colour = "black", face = "bold"),
+        strip.background = element_blank()) +
+  scale_fill_manual('Taxonomic group', values = GEOM_COL_COLOURS) +
+  ylab("Relative abundance") +
+  xlab("Day")
+
+```
+
+```{r}
+ p_combined <- p1 + p2 + p3 + p4
+
+ggsave("../results/nested_taxonomies.png", plot = p_combined, height = 20, width = 35, units = "cm")
 ```
 
