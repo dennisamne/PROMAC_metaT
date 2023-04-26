@@ -1332,3 +1332,84 @@ p4 <- bbmap_p %>%
 ggsave("../results/nested_taxonomies.png", plot = p_combined, height = 20, width = 35, units = "cm")
 ```
 
+## Table contrasts
+This is the file produced by edgeR-output already loaded "contrasts"
+
+## Table Orf-richness
+```{r}
+bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(treatment, orf) %>%
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  filter(tpm > 0) %>% #Removing zero counts in treatments
+  group_by(treatment) %>%
+  tally() %>%
+  ungroup() %>%
+  write_tsv("../results/orf_richness.tsv")
+```
+
+## Table PERMANOVA
+```{r}
+#Creating the matrix based on eggNOGs
+orf_mat <- bbmap_p %>%
+  inner_join(eggnogs, by = "orf") %>% #6674350 rows
+  inner_join(sample_ID, by = "sample") %>%
+  select(seed_eggNOG_ortholog, tpm, sample_name) %>%
+  group_by(sample_name, seed_eggNOG_ortholog) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  spread(seed_eggNOG_ortholog, tpm, fill = 0) %>%
+  column_to_rownames("sample_name") %>%
+  as.matrix() 
+
+#Creating dataframe with metadata (temp and nutrient)
+orf_mat.env <- orf_mat %>% 
+  as.data.frame() %>%
+  rownames_to_column("sample_name") %>%
+  select(sample_name) %>%
+  inner_join(sample_ID, by = "sample_name") %>%
+  select(sample_name, treatment) %>%
+  column_to_rownames("sample_name")
+
+#Running the adonis with temp and nutrrient variables to separate temperature and nutrients for the 2x2 design
+orf_mat.env.dummy <- orf_mat.env %>%
+  mutate(temp = ifelse(
+    grepl("T", treatment),
+    10,1)) %>%
+    mutate(nutrients = ifelse(
+      grepl("N", treatment),
+    1,0),
+    )
+
+permanova <- adonis2(decostand(orf_mat, method = "hellinger") ~ nutrients*temp, data = orf_mat.env.dummy)
+
+# Both are significant, and interaction effect occurs, this is seen regardless of which term is placed first in the sequential setup. But why does this not produce an interaction effect while margin is set instead of sequential??? Regardless of hellinger or not the setup is significant.
+
+bdisp <- betadisper(vegdist(decostand(orf_mat, method ="hellinger"), method = "bray"), as.factor(orf_mat.env.dummy$treatment), type = "median")
+
+
+anova(bdisp)
+
+#Looking at the bdisp it looks well defined, and groups very separated. 
+pdf("../results/betadisp_taxonomy.pdf")
+plot(bdisp)
+dev.off()
+
+#Running the betadisper and permutations, the homogeneity of multivariate dispersions is significant, both with and without hellinger, how to deal with this??? Disp looks acceptable with hellinger though, so use that.
+
+#Correcting the multiple p-values with fdr-correction.
+as.data.frame(permanova) %>%
+  rename(p_value = 5) %>%
+  rownames_to_column("factors") %>%
+  mutate(fdr = p.adjust(p_value, method = "bonferroni")) %>%
+  write_tsv("../results/permanova_taxonomy.tsv")
+```
+
+## Table eggnog-taxonomy
+```{r}
+eggnogs %>%
+  left_join(taxonomy, by = "orf") %>%
+  write_tsv("../results/orf_taxonomy.tsv")
+```
+
