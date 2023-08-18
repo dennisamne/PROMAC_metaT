@@ -1,7 +1,21 @@
 ---
-title: "MetaT_figures_tables"
-format: html
+title: "The effect of temperature and nutrients in concert on prokaryotic gene expression, figures and tables"
+author:
+  - name: Dennis Amnebrink
+    orcid: 0000-0002-2747-6346
+    email: dennis.amnebrink@lnu.se
+    affiliations:
+      - name: Centre for Ecology and Evolution in Microbial Model Systems – EEMiS, Linnaeus University, Kalmar, Sweden
+title-block-banner: true
+date: now
 editor: visual
+toc: true
+number-sections: true
+format:
+  html:
+     code-fold: true
+     default-image-extension: png
+     self-contained: true
 ---
 
 ```{r}
@@ -132,12 +146,14 @@ mesocosm_variables %>%
   ungroup() %>% 
   mutate(Treatment = as.character(Treatment)) %>%
   filter(!variable %in% c("TDP","TDN")) %>%
+  mutate(mean_value = ifelse(grepl("PA|PG", variable), mean_value/1000000, paste0(mean_value)) %>% as.numeric()) %>%
+  mutate(stdev_value = ifelse(grepl("PA|PG", variable), stdev_value/1000000, paste0(stdev_value))%>% as.numeric()) %>%
   mutate(variable = factor(variable,
                            levels = c("Chlorophyll_a","DOC","PA","PG"),
                            labels = c("Chlorophyll~a~(µg~dm^{-3})",
                                       "Dissolved~organic~carbon~(µmol~dm^{-3})",
-                                      "Prokaryotic~abundance~(cells~dm^{-3})",
-                                      "Prokaryotic~growth~(cells~dm^{-3}~d^{-1})"
+                                      "Prokaryotic~abundance~(cells~mL^{-1})~x~1000",
+                                      "Prokaryotic~growth~(cells~mL^{-1}~d^{-1})~x~1000"
                                       )
                            )) %>%
   ggplot(mapping = aes(x = Day_of_experiment, y= mean_value, colour = Treatment)) +
@@ -164,6 +180,7 @@ mesocosm_variables %>%
   ylab("") +
   scale_colour_manual('Treatment', values = TREAT_COLOURS)
 
+ggsave("../results/mesocosmVariables.png")
 ggsave("../results/mesocosmVariables.pdf")
 ```
 
@@ -541,7 +558,7 @@ orf_KEGG2_key <- eggnogs %>%
     KEGG_Pathway %in% Cell_motility ~ "Cell motility"
   ))
   
-#Using the most abundant taxonomic levels 
+# Using the most abundant taxonomic levels 
 
 topOrd <- c("Oceanospirillales","Alteromonadales","Burkholderiales", "Gammaproteobacteria","SAR11 clade","Flavobacteriales","Thaumarchaeota","Rhodobacterales","Pseudomonadales")
 
@@ -577,7 +594,7 @@ bbmap_p %>%
   left_join(taxonomy, by = "orf") %>% #Adding in taxonomic information
   mutate(order_coa = coalesce(order, class, phylum)) %>%
   mutate(order_coa  = ifelse(order_coa %in% topOrd, paste0(order_coa), paste0("Other"))) %>%
- mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("ammonium transporter"),paste0(KEGG_level_2))) %>%
+ mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>%
   group_by(treatment, timepoint, KEGG_level_2, order_coa) %>% #Summarising sum tpm per timepoint and treatment per group
   summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
@@ -642,7 +659,7 @@ bbmap_p %>%
   left_join(taxonomy, by = "orf") %>% #Adding in taxonomic information
   mutate(order_coa = coalesce(order, class, phylum)) %>%
   mutate(order_coa  = ifelse(order_coa %in% topOrd, paste0(order_coa), paste0("Other"))) %>%
- mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("ammonium transporter"),paste0(KEGG_level_2))) %>%
+ mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>%
   group_by(treatment, timepoint, KEGG_level_2, order_coa) %>% #Summarising sum tpm per timepoint and treatment per group
   summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
@@ -706,7 +723,7 @@ bbmap_p %>%
   left_join(taxonomy, by = "orf") %>% #Adding in taxonomic information
   mutate(order_coa = coalesce(order, class, phylum)) %>%
   mutate(order_coa  = ifelse(order_coa %in% topOrd, paste0(order_coa), paste0("Other"))) %>%
- mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("ammonium transporter"),paste0(KEGG_level_2))) %>%
+ mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>%
   group_by(treatment, timepoint, KEGG_level_2, order_coa) %>% #Summarising sum tpm per timepoint and treatment per group
   summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
@@ -771,7 +788,7 @@ bbmap_p %>%
   left_join(taxonomy, by = "orf") %>% #Adding in taxonomic information
   mutate(order_coa = coalesce(order, class, phylum)) %>%
   mutate(order_coa  = ifelse(order_coa %in% topOrd, paste0(order_coa), paste0("Other"))) %>%
- mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("ammonium transporter"),paste0(KEGG_level_2))) %>%
+ mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>%
   group_by(treatment, timepoint, KEGG_level_2, order_coa) %>% #Summarising sum tpm per timepoint and treatment per group
   summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
@@ -813,6 +830,18 @@ TNvsT_TNUp <- ggplot2::last_plot()
         legend.title = element_text(size = 7, colour = "black", face = "bold")) 
 
 ggsave("../results/pathway_level2.png")
+```
+
+```{r}
+#Trying the cowplot version to unify legends.
+legend <- get_legend(
+  # create some space to the left of the legend
+  NvsC_NUp + theme(legend.box.margin = margin(0, 0, 0, 12))
+)
+
+p1 <- plot_grid(NvsC_CDown + theme(legend.position="none"),  NvsC_NUp + theme(legend.position="none"),  TvsC_TUp +  theme(legend.position="none"), TNvsT_TNUp) 
+
+plot_grid(p1, legend, ncol = 1)
 ```
 
 ## Fig Contrast taxonomy
@@ -1332,6 +1361,7 @@ p4 <- bbmap_p %>%
 ggsave("../results/nested_taxonomies.png", plot = p_combined, height = 20, width = 35, units = "cm")
 ```
 
+
 ## Table contrasts
 This is the file produced by edgeR-output already loaded "contrasts"
 
@@ -1411,5 +1441,37 @@ as.data.frame(permanova) %>%
 eggnogs %>%
   left_join(taxonomy, by = "orf") %>%
   write_tsv("../results/orf_taxonomy.tsv")
+```
+
+
+
+# Temporary investigation of the fucky N-cycle
+```{r}
+
+#Relevant N-pathways are:
+#Nitrification, ammonia => nitrite - M00528
+#Denitrification, nitrate => nitrogen - M00529
+#Complete nitrification, comammox, ammonia => nitrite => nitrate - M00804
+#Methane oxidation, methanotroph, methane => formaldehyde - M00174
+
+mets <- c("M00528","M00529","M00804","M00174")
+
+#figure out how to do this
+ #To tease apart the genes in each module, this reference is perfect.
+ #https://www.genome.jp/pathway/map00910
+
+#Nitrification, ammonia => nitrite (Hao, amoABC)
+
+#Denitrification, nitrate => nitrogen (NarGHI, NapAB) (NirK, NirS) (NorBC) (NosZ)
+
+#Complete nitrification, comammox, ammonia => nitrite => nitrate (hao, narG, narZ, nxrA, pmoA-amoA)
+
+# So the overlaps are as such:
+
+  #Hao is in both Nirrification and complete nitrification.
+  # the NarG is overlapping in Denitrification and complete nitrification
+  # amoA overlap in complete nitrification and nitrification
+  # Methane oxidation overlap in pmoA-amoA (exclude this one based on tree)
+
 ```
 
