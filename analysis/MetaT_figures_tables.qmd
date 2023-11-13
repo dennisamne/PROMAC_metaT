@@ -119,6 +119,7 @@ pathway_key <- read_tsv("../data/new_pathways.tsv") %>%
   rbind(c(KEGG_Pathway = "-", pathway = "No entry"))
 
 mesocosm_variables <- read_tsv("../data/Mesocosm_Variables.tsv")
+mesocosm_variables[8, "DOC"] <- 373.9 # Replacing outlier with average value of replicates
 
 #Reading in contrast file from edgeR-output
 contrasts <- read_tsv("../results/edgeR_contrasts.tsv")
@@ -247,14 +248,14 @@ mesocosm_variables %>%
   ungroup() %>% 
   mutate(Treatment = as.character(Treatment)) %>%
   filter(!variable %in% c("TDP","TDN")) %>%
-  mutate(mean_value = ifelse(grepl("PA|PG", variable), mean_value/1000000, paste0(mean_value)) %>% as.numeric()) %>%
-  mutate(stdev_value = ifelse(grepl("PA|PG", variable), stdev_value/1000000, paste0(stdev_value)) %>% as.numeric()) %>%
+  mutate(mean_value = ifelse(grepl("PA|PG", variable), mean_value/10^9, paste0(mean_value)) %>% as.numeric()) %>%
+  mutate(stdev_value = ifelse(grepl("PA|PG", variable), stdev_value/10^9, paste0(stdev_value)) %>% as.numeric()) %>%
   mutate(variable = factor(variable,
                            levels = c("Chlorophyll_a","DOC","PA","PG"),
                            labels = c("Chlorophyll~a~(µg~dm^{-3})",
                                       "Dissolved~organic~carbon~(µmol~dm^{-3})",
-                                      "Prokaryotic~abundance~(cells~mL^{-1})~x~1000",
-                                      "Prokaryotic~growth~(cells~mL^{-1}~d^{-1})~x~1000"
+                                      "Prokaryotic~abundance~(cells~mL^{-1})~x~10^9",
+                                      "Prokaryotic~production~(cells~mL^{-1}~d^{-1})~x~10^9"
                                       )
                            )) %>%
   ggplot(mapping = aes(x = Day_of_experiment, y= mean_value, colour = Treatment)) +
@@ -275,7 +276,8 @@ mesocosm_variables %>%
         strip.text = element_text(size = 7, colour = "black", face = "bold"),
         axis.title = element_text(size = 7, colour = "black", face = "bold"),
         axis.line = element_line(size = 0.3, colour = "black", linetype=1),
-        strip.placement = "outside"
+        strip.placement = "outside",
+        panel.grid = element_blank()
         ) +
   xlab("Day of experiment") +
   ylab("") +
@@ -462,7 +464,7 @@ bbmap_p %>%
   geom_col(position = "dodge") +
   facet_wrap(~ Day) +
   scale_fill_manual('Treatment', values = TREAT_COLOURS) +
-  ylab(bquote('transcripts per million (tpm x'~10^-3~')')) +
+  ylab(bquote('transcripts per million (tpm x'~10^3~')')) +
   xlab("") +
   coord_flip()+
   theme(strip.background = element_blank(),
@@ -572,7 +574,6 @@ ggsave("../results/pathModuCombined.pdf")
 
 ```{r}
 
-  
 # Using the most abundant taxonomic levels 
 
 topOrd <- c("Oceanospirillales","Alteromonadales","Burkholderiales", "Gammaproteobacteria","SAR11 clade","Flavobacteriales","Thaumarchaeota","Rhodobacterales","Pseudomonadales")
@@ -903,8 +904,9 @@ ggsave("../results/pathway_level2.pdf")
 ## Fig Contrast taxonomy
 
 ```{r}
-#Select the 15 most abundant taxa in this case to identify relevant taxa.
-bbmap_p %>%
+
+#Select the 5 most abundant taxa in this case to identify relevant taxa.
+top5 <- bbmap_p %>%
   inner_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
   inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog), by = "orf") %>%
   inner_join(contrasts %>% filter(contrast == "interaction" & type %in% c("Up","Down")), by = "seed_eggNOG_ortholog") %>%
@@ -912,38 +914,84 @@ bbmap_p %>%
   mutate(taxa_group = coalesce(class, phylum, domain))  %>%
   group_by(type, sample, taxa_group) %>%
   summarise(tpm = sum(tpm)) %>%
+  ungroup()  %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(taxa_group) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:5) %>%
+  pull(taxa_group)
+   
+#Select the 5 most abundant taxa in this case to identify relevant taxa.
+
+bbmap_p %>%
+  inner_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
+  inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog), by = "orf") %>% 
+  inner_join(contrasts %>% filter(contrast == "interaction" & type %in% c("Up","Down")), by = "seed_eggNOG_ortholog") %>%
+  inner_join(taxonomy %>% filter(domain %in% c("Bacteria", "Archaea")), by = "orf") %>%
+  mutate(taxa_group = coalesce(class, phylum, domain))  %>%
+  group_by(type, sample, taxa_group) %>% # Summarising tpm for taxonmic level and DE-fidelity per sample 
+  summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
   inner_join(sample_ID, by = "sample") %>%
-  group_by(type, treatment, taxa_group) %>%
+  group_by(type, treatment, taxa_group) %>% #Averaging tpm per taxonomic level, DE-fidelity and treatment
   summarise(tpm = mean(tpm)) %>%
-  ungroup() %>%
-  mutate(order = fct_reorder(taxa_group, tpm, .fun='sum', .desc = TRUE)) %>%
-  filter(order %in% levels(.$order)[1:5]) %>%
-   mutate(type = case_when(type == "Up" ~ "Positive",
-                          TRUE ~ "Negative"
+  ungroup() %>% # Until here is fine
+  #mutate(order = fct_reorder(taxa_group, tpm, .fun='sum', .desc = TRUE)) %>%
+  filter(taxa_group %in% top5) %>%
+  mutate(type = case_when(type == "Up" ~ "Positive",
+                          type == "Down" ~ "Negative",
+                          TRUE ~ paste0(type)
                           )) %>%
-ggplot(mapping = aes(x = order, y = tpm, fill = treatment)) +
+ggplot(mapping = aes(x = taxa_group, y = tpm/100000, fill = treatment)) +
   geom_col(position = "dodge") +
   facet_wrap(~ type) +
   theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
   coord_flip() +
   theme_minimal() +
   theme(axis.text = element_text(size = 7, colour = "black"),
-        axis.title = element_text(size = 7, colour = "black", face = "bold"),
-        legend.title = element_text(size = 7, colour = "black", face = "bold"),
+        axis.title = element_text(size = 7, colour = "black"),
+        legend.title = element_text(size = 7, colour = "black"),
         legend.text = element_text(size = 7, colour = "black")
         )  +
   scale_fill_manual(values = TREAT_COLOURS) +
-  xlab("Taxonomic group") +
-  ylab("") +
-  ylim(0, 150000)
+  xlab("taxonomic group") +
+  ylab(bquote('transcripts per million (tpm x'~10^5~')')) 
+ # ylim(0, 150000)
 
-ggsave("../results/interactionTax.pdf")
+ggsave("../results/interactionTax.png")
 
 interactTax <- ggplot2::last_plot()
 ```
 
 ```{r}
+#In order to enter the ammonium transporter information into KEGG-level2 the orfs matching the KO-term will be put in to a vector to enter the information
+
+amtOrfs <- eggnogs %>%
+  separate_rows(KEGG_ko, sep = ",") %>%
+  filter(KEGG_ko == "ko:K03320") %>%
+  distinct(orf,KEGG_ko) %>%
+  pull(orf)
+
+# Only a few ammonium tranporters are effected by the interaction, and far from enough to end up in the plot. Additionally the interaction DE-ammonium transporters does not overlap with the larger pathway categories.
+
+bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  group_by(treatment, timepoint, orf) %>% # Mean tpm per orf per treatment and timepoint
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(orf_KEGG2_key %>% distinct(orf, KEGG_level_2), by = "orf") %>%
+  mutate(Group = ifelse(KEGG_level_2 %in% top12Path, paste0(KEGG_level_2), "Other")) %>%
+  filter(Group != "Other") %>%
+  group_by(treatment, timepoint, KEGG_level_2) %>% #Summarising sum tpm per timepoint and treatment per pathway
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  inner_join(sample_ID %>% distinct(timepoint, day), by = "timepoint") %>%
+  mutate(Day = case_when(timepoint == "t3" ~ "Day 10",
+                               TRUE ~ "Day 17"))
+
+### UPDATE WITH CORRECT PATHWAYS!
 interactArchFunc <- bbmap_p %>%
   inner_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
   group_by(orf, treatment,timepoint) %>% # Summarising mean tpm per orf per treatment and timepoint
@@ -952,19 +1000,18 @@ interactArchFunc <- bbmap_p %>%
   inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog, KEGG_Pathway), by = "orf") %>%
   inner_join(contrasts %>% filter(contrast == "interaction" & type %in% c("Up","Down")), by = "seed_eggNOG_ortholog") %>%
   inner_join(taxonomy %>% filter(phylum %in% c("Thaumarchaeota")), by = "orf") %>%
-  separate_rows(KEGG_Pathway, sep = ",") %>%
-  mutate(KEGG_Pathway = gsub("[a-z]*","", KEGG_Pathway)) %>%
-  distinct(KEGG_Pathway, treatment, timepoint, orf, tpm, type) %>% #Getting rid of duplicates when separating
-  group_by(KEGG_Pathway, type, treatment) %>% # Summarising tpm
+  inner_join(orf_KEGG2_key %>% distinct(orf, KEGG_level_2), by = "orf") %>%
+  distinct(KEGG_level_2, treatment, timepoint, orf, tpm, type) %>% #Getting rid of duplicates when separating
+  mutate(KEGG_level_2 = ifelse(orf %in% amtOrfs, paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>% #No ammonium transporter orfs here
+  group_by(KEGG_level_2, type, treatment) %>% # Summarising tpm
   summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
-  left_join(pathway_key, by = "KEGG_Pathway") %>%
-  mutate(order = fct_reorder(pathway, tpm, .fun='sum', .desc = TRUE)) %>%
+  mutate(order = fct_reorder(KEGG_level_2, tpm, .fun='sum', .desc = TRUE)) %>%
   filter(order %in% levels(.$order)[1:6]) %>%
   mutate(type = case_when(type == "Up" ~ "Positive",
                           TRUE ~ "Negative"
                           )) %>%
-ggplot(mapping = aes(x = order, y = tpm, fill = treatment)) +
+ggplot(mapping = aes(x = order, y = tpm/100000, fill = treatment)) +
   geom_col(position = "dodge") +
   facet_wrap(~ type) +
   theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
@@ -972,9 +1019,9 @@ ggplot(mapping = aes(x = order, y = tpm, fill = treatment)) +
   theme_minimal() +
   theme(axis.text = element_text(size = 7, colour = "black"))  +
   scale_fill_manual(values = TREAT_COLOURS) +
-  xlab("KEGG Pathway") +
-  ylab("Transcripts per million (Thaumarchaeota)") +
-  ylim(0, 150000)
+  xlab("Metabolic Pathways") +
+  ylab(bquote('Thaumarchaeota transcripts per million (tpm x'~10^5~')'))  
+  #ylim(0, 150000)
 ```
 
 ```{r}
@@ -982,13 +1029,13 @@ ggplot(mapping = aes(x = order, y = tpm, fill = treatment)) +
   plot_layout(ncol = 1) + 
   plot_layout(guides = 'collect') &
    theme(legend.position = "bottom",
-        axis.title.x = element_text(size = 7, colour = "black", face = "bold"),
-        axis.title.y = element_text(size = 7, colour = "black", face = "bold"),
+        axis.title.x = element_text(size = 7, colour = "black"),
+        axis.title.y = element_text(size = 7, colour = "black"),
         axis.text = element_text(size = 7, colour = "black"),
         legend.text = element_text(size = 7, colour = "black"),
-        legend.title = element_text(size = 7, colour = "black", face = "bold")) 
+        legend.title = element_text(size = 7, colour = "black")) 
 
-ggsave("../results/InteractAndArch.pdf")
+ggsave("../results/InteractAndArch.png")
 ```
 
 # Tables
@@ -1112,8 +1159,6 @@ upMod <- res_table %>%
   mutate(contrast = "NvsC",
          type = "Up")
 ```
-
-
 
 ```{r}
 #The run that is used, with multiple comparisons
