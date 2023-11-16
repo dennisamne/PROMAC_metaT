@@ -590,7 +590,7 @@ contrasts %>%
 
 # Using the most abundant taxonomic levels 
 
-topOrd <- c("Oceanospirillales","Alteromonadales","Burkholderiales", "Gammaproteobacteria","SAR11 clade","Flavobacteriales","Thaumarchaeota","Rhodobacterales","Pseudomonadales")
+topOrd <- c("Oceanospirillales","Alteromonadales","Burkholderiales", "Gammaproteobacteria","SAR11 clade","Flavobacteriales","Thaumarchaeota","Rhodobacterales","Pseudomonadales", "Nitrosopumilus")
 
 top10 <- bbmap_p %>%
   inner_join(sample_ID, by = "sample") %>%
@@ -623,6 +623,7 @@ bbmap_p %>%
   semi_join(contrasts %>% filter(contrast == "NvsC" & type == "Down"), by = "seed_eggNOG_ortholog") %>% # Relevant enogs
   left_join(taxonomy, by = "orf") %>% #Adding in taxonomic information
   mutate(order_coa = coalesce(order, class, phylum)) %>%
+  mutate(order_coa = ifelse(phylum == "Thaumarchaeota" & genus == "Nitrosopumilus", paste0(genus), paste0(order_coa))) %>%
   mutate(order_coa  = ifelse(order_coa %in% topOrd, paste0(order_coa), paste0("Other"))) %>%
   mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>%
   group_by(treatment, timepoint, KEGG_level_2, order_coa) %>% #Summarising sum tpm per timepoint and treatment per group
@@ -646,6 +647,7 @@ bbmap_p %>%
                                            "Thaumarchaeota" = "#6A3D9A",
                                            "Rhodobacterales" = "#FF7F00",
                                            "Pseudomonadales" = "#FDBF6F",
+                                           "Nitrosopumilus" = "#B15928",
                                            "Other" = "#808080")) +
   ylab("transcripts per million") +
   xlab("") +
@@ -689,8 +691,9 @@ bbmap_p %>%
   semi_join(contrasts %>% filter(contrast == "NvsC" & type == "Up"), by = "seed_eggNOG_ortholog") %>% # Relevant enogs
   left_join(taxonomy, by = "orf") %>% #Adding in taxonomic information
   mutate(order_coa = coalesce(order, class, phylum)) %>%
+  mutate(order_coa = ifelse(phylum == "Thaumarchaeota" & genus == "Nitrosopumilus", paste0(genus), paste0(order_coa))) %>%
   mutate(order_coa  = ifelse(order_coa %in% topOrd, paste0(order_coa), paste0("Other"))) %>%
- mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>%
+  mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>%
   group_by(treatment, timepoint, KEGG_level_2, order_coa) %>% #Summarising sum tpm per timepoint and treatment per group
   summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
@@ -712,6 +715,7 @@ bbmap_p %>%
                                            "Thaumarchaeota" = "#6A3D9A",
                                            "Rhodobacterales" = "#FF7F00",
                                            "Pseudomonadales" = "#FDBF6F",
+                                           "Nitrosopumilus" = "#B15928",
                                            "Other" = "#808080"), guide = "none") +
   ylab("transcripts per million") +
   xlab("") +
@@ -753,6 +757,7 @@ bbmap_p %>%
   semi_join(contrasts %>% filter(contrast == "TvsC" & type == "Up"), by = "seed_eggNOG_ortholog") %>% # Relevant enogs
   left_join(taxonomy, by = "orf") %>% #Adding in taxonomic information
   mutate(order_coa = coalesce(order, class, phylum)) %>%
+  mutate(order_coa = ifelse(phylum == "Thaumarchaeota" & genus == "Nitrosopumilus", paste0(genus), paste0(order_coa))) %>%
   mutate(order_coa  = ifelse(order_coa %in% topOrd, paste0(order_coa), paste0("Other"))) %>%
  mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>%
   group_by(treatment, timepoint, KEGG_level_2, order_coa) %>% #Summarising sum tpm per timepoint and treatment per group
@@ -776,6 +781,7 @@ bbmap_p %>%
                                            "Thaumarchaeota" = "#6A3D9A",
                                            "Rhodobacterales" = "#FF7F00",
                                            "Pseudomonadales" = "#FDBF6F",
+                                           "Nitrosopumilus" = "#B15928",
                                            "Other" = "#808080"),guide = "none") +
   ylab("transcripts per million") +
   xlab("") +
@@ -818,6 +824,7 @@ bbmap_p %>%
   semi_join(contrasts %>% filter(contrast == "TNvsT" & type == "Up"), by = "seed_eggNOG_ortholog") %>% # Relevant enogs
   left_join(taxonomy, by = "orf") %>% #Adding in taxonomic information
   mutate(order_coa = coalesce(order, class, phylum)) %>%
+  mutate(order_coa = ifelse(phylum == "Thaumarchaeota" & genus == "Nitrosopumilus", paste0(genus), paste0(order_coa))) %>%
   mutate(order_coa  = ifelse(order_coa %in% topOrd, paste0(order_coa), paste0("Other"))) %>%
   mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>%
   group_by(treatment, timepoint, KEGG_level_2, order_coa) %>% #Summarising sum tpm per timepoint and treatment per group
@@ -841,6 +848,7 @@ bbmap_p %>%
                                            "Thaumarchaeota" = "#6A3D9A",
                                            "Rhodobacterales" = "#FF7F00",
                                            "Pseudomonadales" = "#FDBF6F",
+                                           "Nitrosopumilus" = "#B15928",
                                            "Other" = "#808080"), guide = "none") +
   ylab("transcripts per million") +
   xlab("") +
@@ -1218,22 +1226,17 @@ ggsave("../results/contModu.png", width = 20, height = 21 ,unit = "cm")
 
 ```
 
-## Fig Contrast taxonomy
-```{r}
-
-```
-
-
 ## Fig interaction taxonomy
 ```{r}
 
-#Select the 5 most abundant taxa in this case to identify relevant taxa.
-top5 <- bbmap_p %>%
+#Select the 6 most abundant taxa in this case to identify relevant taxa.
+top6 <- bbmap_p %>%
   inner_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
   inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog), by = "orf") %>%
   inner_join(contrasts %>% filter(contrast == "interaction" & type %in% c("Up","Down")), by = "seed_eggNOG_ortholog") %>%
   inner_join(taxonomy %>% filter(domain %in% c("Bacteria", "Archaea")), by = "orf") %>%
   mutate(taxa_group = coalesce(class, phylum, domain))  %>%
+  mutate(taxa_group = ifelse(phylum == "Thaumarchaeota" & genus == "Nitrosopumilus", paste0(genus), paste0(taxa_group))) %>%
   group_by(type, sample, taxa_group) %>%
   summarise(tpm = sum(tpm)) %>%
   ungroup()  %>%
@@ -1242,7 +1245,7 @@ top5 <- bbmap_p %>%
   summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
   arrange(desc(tpm)) %>%
-  slice(1:5) %>%
+  slice(1:6) %>%
   pull(taxa_group)
    
 #Select the 5 most abundant taxa in this case to identify relevant taxa.
@@ -1253,6 +1256,7 @@ bbmap_p %>%
   inner_join(contrasts %>% filter(contrast == "interaction" & type %in% c("Up","Down")), by = "seed_eggNOG_ortholog") %>%
   inner_join(taxonomy %>% filter(domain %in% c("Bacteria", "Archaea")), by = "orf") %>%
   mutate(taxa_group = coalesce(class, phylum, domain))  %>%
+  mutate(taxa_group = ifelse(phylum == "Thaumarchaeota" & genus == "Nitrosopumilus", paste0(genus), paste0(taxa_group))) %>%
   group_by(type, sample, taxa_group) %>% # Summarising tpm for taxonmic level and DE-fidelity per sample 
   summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
@@ -1261,12 +1265,13 @@ bbmap_p %>%
   summarise(tpm = mean(tpm)) %>%
   ungroup() %>% # Until here is fine
   #mutate(order = fct_reorder(taxa_group, tpm, .fun='sum', .desc = TRUE)) %>%
-  filter(taxa_group %in% top5) %>%
+  mutate(taxa_group = forcats::as_factor(taxa_group) %>% fct_reorder(tpm, .fun = "sum", .desc = FALSE)) %>%
+  filter(taxa_group %in% top6) %>%
   mutate(type = case_when(type == "Up" ~ "Positive",
                           type == "Down" ~ "Negative",
                           TRUE ~ paste0(type)
                           )) %>%
-ggplot(mapping = aes(x = taxa_group, y = tpm/100000, fill = treatment)) +
+ggplot(mapping = aes(x = fct_relevel(taxa_group, "NA", after = Inf), y = tpm/100000, fill = treatment)) +
   geom_col(position = "dodge") +
   facet_wrap(~ type) +
   theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
@@ -1321,7 +1326,7 @@ interactArchFunc <- bbmap_p %>%
   ungroup() %>%
   inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog, KEGG_Pathway), by = "orf") %>%
   inner_join(contrasts %>% filter(contrast == "interaction" & type %in% c("Up","Down")), by = "seed_eggNOG_ortholog") %>%
-  inner_join(taxonomy %>% filter(phylum %in% c("Thaumarchaeota")), by = "orf") %>%
+  inner_join(taxonomy %>% filter(genus %in% c("Nitrosopumilus")), by = "orf") %>%
   inner_join(orf_KEGG2_key %>% distinct(orf, KEGG_level_2), by = "orf") %>%
   distinct(KEGG_level_2, treatment, timepoint, orf, tpm, type) %>% #Getting rid of duplicates when separating
   mutate(KEGG_level_2 = ifelse(orf %in% amtOrfs, paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>% #No ammonium transporter orfs here
@@ -1342,7 +1347,7 @@ ggplot(mapping = aes(x = order, y = tpm/100000, fill = treatment)) +
   theme(axis.text = element_text(size = 7, colour = "black"))  +
   scale_fill_manual(values = TREAT_COLOURS) +
   xlab("Metabolic Pathways") +
-  ylab(bquote('Thaumarchaeota transcripts per million (tpm x'~10^5~')'))  
+  ylab(bquote('Nitrosopumilus transcripts per million (tpm x'~10^5~')'))  
   #ylim(0, 150000)
 ```
 
