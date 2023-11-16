@@ -74,24 +74,8 @@ bbmap <- fread("../data/bbmap_counts.tsv.gz", sep = "\t") %>%
               dplyr::select(-Geneid,-Chr) %>%
               dplyr::select(orf,Start,End,Strand,Length,sample,count,tpm) 
 
-#kofamscan <- fread("../data2/kofamscan2.tsv.gz", sep = "\t" ) %>%# A few KO-terms have several hits, to remove this issue these are annotated as ambiguous instead, to keep information but remove row duplications
-#rename(orf = "gene name",
-#       KEGG_ko = "KO",
-#       evalue = 6) %>%
-#  filter(evalue < 1e-5) %>%
-#  group_by(orf) %>%
-#  slice_max(order_by = score, n = 1) %>%
- # ungroup() %>%
- # group_by(orf) %>% #This grop_by selects best hit of all KO's based on evalue (only if similar bitscore)
- # slice_min(order_by = evalue, n = 1) %>%
- # ungroup() %>%
- # group_by(orf) %>% #This grop_by selects best hit of all KO's based on treshold (only if similar bitscore)
- # slice(1) %>% # All duplicates are now removed
- # ungroup() %>%
- # select(-1)
+#File to connect NGI ID with our own classification ID
 
-
-#File to connect NGI ID with our own classification ID, add the µ-values to this file for testing later, or do that in a sep file?
 sample_ID <- read_tsv("../data/J.Pinhassi_21_02_sample_info.txt") %>%
   dplyr::select(1:2) %>%
   dplyr::rename(sample = 1, sample_name = 2) %>%
@@ -108,11 +92,12 @@ sample_ID <- read_tsv("../data/J.Pinhassi_21_02_sample_info.txt") %>%
          ) %>%
   as.data.table()
 
-#used to remove some pathways that are covarying due to the same genes present I.e complete nitrification and nitrification. Mehtan oxidation/ammonia oxidation
+#used to remove some pathways that are covarying due to the same genes present I.e complete nitrification and nitrification. Methane oxidation/ammonia oxidation (showing the same abundances -> meaning that the most simple pathways are expressed).
 removeMods <- c("M00173","M00011","M00804","M00174")
 
 module_legend <- read_tsv("../data/module_legend.tsv", col_names = c("KEGG_Module","Entry")) %>%
-  filter(!KEGG_Module %in% removeMods)
+  filter(!KEGG_Module %in% removeMods) %>%
+  mutate(Entry = sub(",","\n", Entry)) 
 
 pathway_key <- read_tsv("../data/new_pathways.tsv") %>%
   rename(KEGG_Pathway = "identifier") %>%
@@ -124,6 +109,7 @@ mesocosm_variables[8, "DOC"] <- 373.9 # Replacing outlier with average value of 
 #Reading in contrast file from edgeR-output
 contrasts <- read_tsv("../results/edgeR_contrasts.tsv")
 ```
+
 
 ```{r}
 #| label: filtering_prokaryotes
@@ -442,6 +428,14 @@ top12Path <- bbmap_p %>%
   slice(1:12) %>%
   pull(KEGG_level_2)
 
+#Identifying ammonium transporter orfs. After inspecting plot before and after the addition of amt-genes, there was no collision between larger pathway patterns and ammonia transporter expression (i.e no overlap)
+
+amtOrfs <- eggnogs %>%
+  separate_rows(KEGG_ko, sep = ",") %>%
+  filter(KEGG_ko == "ko:K03320") %>%
+  distinct(orf,KEGG_ko) %>%
+  pull(orf)
+
 #inner_join(orf_KEGG2_key, by = "orf") %>%
 #inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog, KEGG_ko), by = "orf")
 
@@ -453,7 +447,9 @@ bbmap_p %>%
   ungroup() %>%
   inner_join(orf_KEGG2_key %>% distinct(orf, KEGG_level_2), by = "orf") %>%
   mutate(Group = ifelse(KEGG_level_2 %in% top12Path, paste0(KEGG_level_2), "Other")) %>%
+  mutate(Group = ifelse(orf %in% amtOrfs, paste0("Ammonium transporter"),paste0(Group))) %>%
   filter(Group != "Other") %>%
+  mutate(KEGG_level_2 = ifelse(orf %in% amtOrfs, paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>%
   group_by(treatment, timepoint, KEGG_level_2) %>% #Summarising sum tpm per timepoint and treatment per pathway
   summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
@@ -492,6 +488,7 @@ p1
 #| label: fig-modules
 #| fig-cap: Distribution of most abundant KEGG-modules in the different treatments.
 #| warning: false
+
 #Getting the most abundant annotated modules 
 top12Module <- bbmap_p %>%
   inner_join(sample_ID, by = "sample") %>%
@@ -529,11 +526,12 @@ plot1 <- bbmap_p %>%
 plot1 %>%
   mutate(Day = case_when(timepoint == "t3" ~ "Day 10",
                                TRUE ~ "Day 17")) %>%
+  mutate(Entry = ifelse(Entry == "Isoleucine biosynthesis, threonine => 2-oxobutanoate => isoleucine", paste0("Isoleucine biosynthesis \n threonine => 2-oxobutanoate => isoleucine"), paste0(Entry))) %>% #Splitting the name into two rows.
   ggplot(mapping = aes(x= Entry, y = tpm/1000, fill = treatment)) +
   geom_col(position = "dodge") +
   facet_wrap(~ Day) +
   scale_fill_manual('Treatment', values = TREAT_COLOURS) +
-  ylab(bquote('transcripts per million (tpm x'~10^-3~')')) +
+  ylab(bquote('transcripts per million (tpm x'~10^3~')')) +
   xlab("") +
   coord_flip() +
   theme(strip.background = element_blank(),
@@ -566,6 +564,22 @@ p2 <- ggplot2::last_plot()
 plotsComb
 #ggsave("../results/pathModuCombined.png")
 ggsave("../results/pathModuCombined.pdf")
+```
+
+## Calculating total genes involved, and number of DE-genes in edgeR analysis
+```{r}
+#| label: edgeR-largescale stats
+#| cache: true
+#| warning: false
+
+contrasts %>%
+  distinct(seed_eggNOG_ortholog) %>%
+  nrow() # Number of gene functions involved in edgeR analysis
+
+contrasts %>%
+  filter(type != "non-DE") %>%
+  distinct(seed_eggNOG_ortholog) %>%
+  nrow()
 ```
 
 ## Figure contKEGG2
@@ -610,7 +624,7 @@ bbmap_p %>%
   left_join(taxonomy, by = "orf") %>% #Adding in taxonomic information
   mutate(order_coa = coalesce(order, class, phylum)) %>%
   mutate(order_coa  = ifelse(order_coa %in% topOrd, paste0(order_coa), paste0("Other"))) %>%
- mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>%
+  mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>%
   group_by(treatment, timepoint, KEGG_level_2, order_coa) %>% #Summarising sum tpm per timepoint and treatment per group
   summarise(tpm = sum(tpm)) %>%
   ungroup() %>%
@@ -897,12 +911,320 @@ bbmap_p %>%
         legend.text = element_text(size = 7, colour = "black"),
         legend.title = element_blank())  
  
-ggsave("../results/pathway_level2.pdf")
+ggsave("../results/pathway_level2.png")
+
+```
+
+## Fig ContModu
+```{r}
+# Selecting the most abundant taxonomic levels for all contrast-responsive genes.
+
+#Identifying most abundant taxa in each plot
+  NvsCDown <- c("Rickettsiales","Burkholderiales", "SAR92", "SAR11 clade")
+  NvsCUp <- c("Thaumarchaeota","Flavobacteriales","Alteromonadales","Campylobacterales")
+  TvsCTUp <- c("Burkholderiales","Oceanospirillales", "Rickettsiales", "Nitrosomonadales")
+  TNvsTTax <- c("Alteromonadales", "Oceanospirillales", "Rhodobacterales", "Hydrogenophilales")
+  
+  topOrd <- sort(unique(c(NvsCDown,NvsCUp,TvsCTUp,TNvsTTax)))
+  
+  #Creating the colour legend
+  Tax_colour <- c("Alteromonadales" = "#FDBF6F",
+                  "Burkholderiales" = "#1F78B4",
+                  "Campylobacterales" = "#FF7F00",
+                  "Flavobacteriales" = "#E31A1C",
+                  "Hydrogenophilales" = "magenta",
+                  "Nitrosomonadales" = "#FFFF99",
+                  "Oceanospirillales" = "#6A3D9A",
+                  "Rhodobacterales" = "#B15928",
+                  "Rickettsiales" = "#A6CEE3",
+                  "SAR11 clade" = "#33A02C",
+                  "SAR92" = "#B2DF8A",
+                  "Thaumarchaeota" = "#FB9A99" ,
+                  "Other" = "#808080"
+                  )
+
+
+######################
+
+#Getting the most abundant modules for the C-treatment contrast DE-genes
+top15Module <- bbmap_p %>%
+  inner_join(sample_ID %>% filter(day == '10'), by = "sample") %>%
+  filter(treatment == "C") %>%
+  group_by(treatment,timepoint, orf) %>% # Mean tpm per orf 
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(eggnogs, by = "orf") %>%
+  semi_join(contrasts %>% filter(contrast == "NvsC" & type == "Down"), by = "seed_eggNOG_ortholog") %>%
+  separate_rows(KEGG_Module, sep = ",") %>%
+  distinct(KEGG_Module, treatment, timepoint, orf, tpm) %>% #Getting rid of duplicates due to the removal of prefixes
+  group_by(KEGG_Module) %>% # Summarising tpm
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  left_join(module_legend, by = "KEGG_Module") %>% # Stop to check that all modules have been assigned entries (No NA's)
+  arrange(desc(tpm)) %>%
+  filter(KEGG_Module != "-") %>%
+  filter(is.na(Entry) | Entry != "No entry") %>%
+  filter(!KEGG_Module %in% removeMods) %>%
+  slice(1:15) %>%
+  pull(KEGG_Module)
+
+#NvsC contrast - C treatment genes
+bbmap_p %>%
+  inner_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  filter(treatment %in% c("C")) %>% #selecting relevant treatment for the plot
+  group_by(orf, treatment, timepoint) %>% # Summarising mean tpm per orf per treatment 
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%       
+  inner_join(eggnogs, by = "orf") %>%
+  semi_join(contrasts %>% filter(contrast == "NvsC" & type == "Down"), by = "seed_eggNOG_ortholog") %>% # Relevant enogs
+  inner_join(taxonomy, by = "orf") %>% #Adding in taxonomic information
+  separate_rows(KEGG_Module, sep = ",") %>%
+  mutate(order_coa = coalesce(order, class, phylum)) %>%
+  mutate(order_coa  = ifelse(order_coa %in% topOrd, paste0(order_coa), paste0("Other"))) %>%
+  group_by(KEGG_Module, order_coa, timepoint) %>%
+  summarise(tpm = sum(tpm)) %>% #Summarising tpm for the module and taxonomy
+  ungroup() %>%
+  mutate(Day = case_when(timepoint == "t3" ~ "day 10",
+                               TRUE ~ "day 17")) %>%
+  filter(KEGG_Module %in% top15Module) %>%
+  left_join(module_legend, by = "KEGG_Module") %>%
+  mutate(Entry = forcats::as_factor(Entry) %>% fct_reorder(tpm, .fun = "sum" ,.desc = FALSE)) %>%
+  #mutate(order = fct_reorder(order_coa, tpm, .fun='sum', .desc = TRUE)) %>%
+  mutate(order_coa = factor(order_coa, levels = c(topOrd, "Other"))) %>%
+  #filter(order %in% levels(.$order)[1:12]) %>%
+  ggplot(mapping = aes(x=Entry, y = tpm, fill = fct_relevel(order_coa, "Other", after = Inf)))  +
+  geom_col() +
+  theme(axis.text.x = element_text(size = 7), 
+        panel.background = element_blank(),
+        axis.text.y = element_text(size = 7)) +
+  scale_fill_manual('Taxonomy', values = Tax_colour, drop = FALSE) +
+  ylab("transcripts per million") +
+  xlab("") +
+  coord_flip() +
+  theme(strip.background = element_blank()) +
+  guides(fill = guide_legend(nrow = 3, byrow = TRUE))
+
+NvsC_CDown <- ggplot2::last_plot()
+
+##################################
+
+#NvsC contrast - N treatment genes
+#Getting the most abundant modules for the C-treatment contrast DE-genes
+
+top15Module <- bbmap_p %>%
+  inner_join(sample_ID %>% filter(day == '10'), by = "sample") %>%
+  filter(treatment == "N") %>%
+  group_by(treatment,timepoint, orf) %>% # Mean tpm per orf 
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(eggnogs, by = "orf") %>%
+  semi_join(contrasts %>% filter(contrast == "NvsC" & type == "Up"), by = "seed_eggNOG_ortholog") %>%
+  separate_rows(KEGG_Module, sep = ",") %>%
+  distinct(KEGG_Module, treatment, timepoint, orf, tpm) %>% #Getting rid of duplicates due to the removal of prefixes
+  group_by(KEGG_Module) %>% # Summarising tpm
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  left_join(module_legend, by = "KEGG_Module") %>% # Stop to check that all modules have been assigned entries (No NA's)
+  arrange(desc(tpm)) %>%
+  filter(KEGG_Module != "-") %>%
+  filter(is.na(Entry) | Entry != "No entry") %>%
+  filter(!KEGG_Module %in% removeMods) %>%
+  slice(1:15) %>%
+  pull(KEGG_Module)
+
+bbmap_p %>%
+  inner_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  filter(treatment %in% c("N")) %>% #selecting relevant treatment for the plot
+  group_by(orf, treatment, timepoint) %>% # Summarising mean tpm per orf per treatment 
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%       
+  inner_join(eggnogs, by = "orf") %>%
+  semi_join(contrasts %>% filter(contrast == "NvsC" & type == "Up"), by = "seed_eggNOG_ortholog") %>% # Relevant enogs
+  inner_join(taxonomy, by = "orf") %>% #Adding in taxonomic information
+  separate_rows(KEGG_Module, sep = ",") %>%
+  mutate(order_coa = coalesce(order, class, phylum)) %>%
+  mutate(order_coa  = ifelse(order_coa %in% topOrd, paste0(order_coa), paste0("Other"))) %>%
+  group_by(KEGG_Module, order_coa, timepoint) %>%
+  summarise(tpm = sum(tpm)) %>% #Summarising tpm for the module and taxonomy
+  ungroup() %>%
+  mutate(Day = case_when(timepoint == "t3" ~ "day 10",
+                               TRUE ~ "day 17")) %>%
+  filter(KEGG_Module %in% top15Module) %>%
+  left_join(module_legend, by = "KEGG_Module") %>%
+  mutate(Entry = forcats::as_factor(Entry) %>% fct_reorder(tpm, .fun = "sum" ,.desc = FALSE)) %>%
+  #mutate(order = fct_reorder(order_coa, tpm, .fun='sum', .desc = TRUE)) %>%
+  mutate(order_coa = factor(order_coa, levels = c(topOrd, "Other"))) %>%
+ # filter(order %in% levels(.$order)[1:12]) %>%
+  ggplot(mapping = aes(x=Entry, y = tpm, fill = fct_relevel(order_coa, "Other", after = Inf)))  +
+  geom_col() +
+  theme(axis.text.x = element_text(size = 7), 
+        panel.background = element_blank(),
+        axis.text.y = element_text(size = 7))  +
+  scale_fill_manual('Taxonomy', values = Tax_colour, drop = FALSE) +
+  ylab("transcripts per million") +
+  xlab("") +
+  coord_flip() +
+  theme(strip.background = element_blank()) +
+  guides(fill = guide_legend(nrow = 3, byrow = TRUE))
+
+NvsC_NUp <- ggplot2::last_plot()
+
+###############################
+
+#TvsC contrast T genes
+
+top15Module <- bbmap_p %>%
+  inner_join(sample_ID %>% filter(day == '10'), by = "sample") %>%
+  filter(treatment == "T") %>%
+  group_by(treatment,timepoint, orf) %>% # Mean tpm per orf 
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(eggnogs, by = "orf") %>%
+  semi_join(contrasts %>% filter(contrast == "TvsC" & type == "Up"), by = "seed_eggNOG_ortholog") %>%
+  separate_rows(KEGG_Module, sep = ",") %>%
+  distinct(KEGG_Module, treatment, timepoint, orf, tpm) %>% #Getting rid of duplicates due to the removal of prefixes
+  group_by(KEGG_Module) %>% # Summarising tpm
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  left_join(module_legend, by = "KEGG_Module") %>% # Stop to check that all modules have been assigned entries (No NA's)
+  arrange(desc(tpm)) %>%
+  filter(KEGG_Module != "-") %>%
+  filter(is.na(Entry) | Entry != "No entry") %>%
+  filter(!KEGG_Module %in% removeMods) %>%
+  slice(1:15) %>%
+  pull(KEGG_Module)
+
+bbmap_p %>%
+  inner_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  filter(treatment %in% c("T")) %>% #selecting relevant treatment for the plot
+  group_by(orf, treatment, timepoint) %>% # Summarising mean tpm per orf per treatment 
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%       
+  inner_join(eggnogs, by = "orf") %>%
+  semi_join(contrasts %>% filter(contrast == "TvsC" & type == "Up"), by = "seed_eggNOG_ortholog") %>% # Relevant enogs
+  inner_join(taxonomy, by = "orf") %>% #Adding in taxonomic information
+  separate_rows(KEGG_Module, sep = ",") %>%
+  mutate(order_coa = coalesce(order, class, phylum)) %>%
+  #mutate(order_coa  = ifelse(order_coa %in% topOrd, paste0(order_coa), paste0("Other"))) %>%
+  group_by(KEGG_Module, order_coa, timepoint) %>%
+  summarise(tpm = sum(tpm)) %>% #Summarising tpm for the module and taxonomy
+  ungroup() %>%
+  mutate(Day = case_when(timepoint == "t3" ~ "day 10",
+                               TRUE ~ "day 17")) %>%
+  filter(KEGG_Module %in% top15Module) %>%
+  left_join(module_legend, by = "KEGG_Module") %>%
+  mutate(Entry = forcats::as_factor(Entry) %>% fct_reorder(tpm, .fun = "sum" ,.desc = FALSE)) %>%
+  #mutate(order = fct_reorder(order_coa, tpm, .fun='sum', .desc = TRUE)) %>%
+  mutate(order_coa = factor(order_coa, levels = c(topOrd, "Other"))) %>%
+  #filter(order %in% levels(.$order)[1:12]) %>%
+  ggplot(mapping = aes(x=Entry, y = tpm, fill = fct_relevel(order_coa, "Other", after = Inf)))  +
+  geom_col() +
+  theme(axis.text.x = element_text(size = 7), 
+        panel.background = element_blank(),
+        axis.text.y = element_text(size = 7))  +
+  scale_fill_manual('Taxonomy', values = Tax_colour, drop = FALSE) +
+  ylab("transcripts per million") +
+  xlab("") +
+  coord_flip() +
+  theme(strip.background = element_blank()) +
+  guides(fill = guide_legend(nrow = 3, byrow = TRUE))
+
+TvsC_TUp <- ggplot2::last_plot()
+
+
+####################
+
+#TNvsT contrast Up genes
+
+top15Module <- bbmap_p %>%
+  inner_join(sample_ID %>% filter(day == '10'), by = "sample") %>%
+  filter(treatment == "TN") %>%
+  group_by(treatment,timepoint, orf) %>% # Mean tpm per orf 
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%
+  inner_join(eggnogs, by = "orf") %>%
+  semi_join(contrasts %>% filter(contrast == "TNvsT" & type == "Up"), by = "seed_eggNOG_ortholog") %>%
+  separate_rows(KEGG_Module, sep = ",") %>%
+  distinct(KEGG_Module, treatment, timepoint, orf, tpm) %>% #Getting rid of duplicates due to the removal of prefixes
+  group_by(KEGG_Module) %>% # Summarising tpm
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  left_join(module_legend, by = "KEGG_Module") %>% # Stop to check that all modules have been assigned entries (No NA's)
+  arrange(desc(tpm)) %>%
+  filter(KEGG_Module != "-") %>%
+  filter(is.na(Entry) | Entry != "No entry") %>%
+  filter(!KEGG_Module %in% removeMods) %>%
+  slice(1:15) %>%
+  pull(KEGG_Module)
+
+ bbmap_p %>%
+  inner_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  filter(treatment %in% c("TN")) %>% #selecting relevant treatment for the plot
+  group_by(orf, treatment, timepoint) %>% # Summarising mean tpm per orf per treatment 
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%       
+  inner_join(eggnogs, by = "orf") %>%
+  semi_join(contrasts %>% filter(contrast == "TNvsT" & type == "Up"), by = "seed_eggNOG_ortholog") %>% # Relevant enogs
+  inner_join(taxonomy, by = "orf") %>% #Adding in taxonomic information
+  separate_rows(KEGG_Module, sep = ",") %>%
+  mutate(order_coa = coalesce(order, class, phylum)) %>%
+  mutate(order_coa  = ifelse(order_coa %in% topOrd, paste0(order_coa), paste0("Other"))) %>%
+  group_by(KEGG_Module, order_coa, timepoint) %>%
+  summarise(tpm = sum(tpm)) %>% #Summarising tpm for the module and taxonomy
+  ungroup() %>%
+  mutate(Day = case_when(timepoint == "t3" ~ "day 10",
+                               TRUE ~ "day 17")) %>%
+  filter(KEGG_Module %in% top15Module) %>%
+  left_join(module_legend, by = "KEGG_Module") %>%
+  mutate(Entry = forcats::as_factor(Entry) %>% fct_reorder(tpm, .fun = "sum" ,.desc = FALSE)) %>%
+  #mutate(order = fct_reorder(order_coa, tpm, .fun='sum', .desc = TRUE)) %>%
+  mutate(order_coa = factor(order_coa, levels = c(topOrd, "Other"))) %>%
+ # filter(order %in% levels(.$order)[1:12]) %>%
+  ggplot(mapping = aes(x=Entry, y = tpm, fill = fct_relevel(order_coa, "Other", after = Inf)))  +
+  geom_col() +
+  theme(axis.text.x = element_text(size = 7), 
+        panel.background = element_blank(),
+        axis.text.y = element_text(size = 7))  +
+  scale_fill_manual('Taxonomy', values = Tax_colour, drop = FALSE) +
+  ylab("transcripts per million") +
+  xlab("") +
+  coord_flip() +
+  theme(strip.background = element_blank()) +
+  guides(fill = guide_legend(nrow = 3, byrow = TRUE))
+
+TNvsT_TNUp <- ggplot2::last_plot()
+```
+
+### Plotting the contrasts together
+```{r}
+
+### Now add all the other phyla and unused levels to one plot, and use only that legend, to merge them well!
+
+(NvsC_CDown + theme(legend.position = "none")) + 
+(NvsC_NUp + theme(legend.position = "none")) + 
+(TvsC_TUp + theme(legend.position = "none"))  + 
+ TNvsT_TNUp  +
+  #guides(fill = guide_legend(title.position = "top")) +
+  plot_annotation(tag_levels = list(c("C","N","T","TN"))) +
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom",
+        axis.title.x = element_text(size = 7, colour = "black", face = "bold"),
+        axis.text = element_text(size = 7, colour = "black"),
+        legend.key.size = unit(0.2, 'cm'),
+        legend.text = element_text(size = 7, colour = "black"),
+        legend.title = element_blank())  
+
+ggsave("../results/contModu.png", width = 20, height = 21 ,unit = "cm")
 
 ```
 
 ## Fig Contrast taxonomy
+```{r}
 
+```
+
+
+## Fig interaction taxonomy
 ```{r}
 
 #Select the 5 most abundant taxa in this case to identify relevant taxa.
@@ -991,7 +1313,7 @@ bbmap_p %>%
   mutate(Day = case_when(timepoint == "t3" ~ "Day 10",
                                TRUE ~ "Day 17"))
 
-### UPDATE WITH CORRECT PATHWAYS!
+
 interactArchFunc <- bbmap_p %>%
   inner_join(sample_ID %>% filter(day == "10"), by = "sample") %>%
   group_by(orf, treatment,timepoint) %>% # Summarising mean tpm per orf per treatment and timepoint
@@ -1456,6 +1778,13 @@ p4 <- bbmap_p %>%
 
 ```
 
+## Fig S Contmodu
+```{r}
+
+```
+
+
+
 ```{r}
  p_combined <- p1 + p2 + p3 + p4
 
@@ -1464,9 +1793,9 @@ ggsave("../results/nested_taxonomies.png", plot = p_combined, height = 20, width
 
 
 ## Table contrasts
-This is the file produced by edgeR-output already loaded "contrasts"
+This is the file produced by edgeR-output already loaded, "contrasts".
 
-## Table Orf-richness
+## Table Orf-richness (Deprecated)
 ```{r}
 bbmap_p %>%
   inner_join(sample_ID, by = "sample") %>%
@@ -1544,8 +1873,6 @@ eggnogs %>%
   write_tsv("../results/orf_taxonomy.tsv")
 ```
 
-
-
 # Temporary investigation of the fucky N-cycle
 ```{r}
 
@@ -1579,6 +1906,7 @@ mets <- c("M00528","M00529","M00804","M00174")
 #Complete nitrification - M00804
 
 ```
+
 # Resolving the stupid amoa/pmoa issue by identifying sequencing to place into fucking tree
 ```{r}
 top12Module <- bbmap_p %>%
