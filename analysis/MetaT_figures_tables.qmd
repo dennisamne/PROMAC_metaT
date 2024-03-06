@@ -45,6 +45,37 @@ GEOM_COL_COLOURS = c(
   RColorBrewer::brewer.pal(12, name = 'Paired'))
 
 TREAT_COLOURS <- c("blue","green3","red","yellow4")
+                   
+ALLTAX <- c("Alteromonadales" = "#A6CEE3",
+            "Burkholderiales" = "#1F78B4",
+            "Cenarchaeales" = "#B2DF8A",
+            "Flavobacteriales" = "#33A02C",
+            "Gammaproteobacteria" = "#FB9A99",
+            "Methylophilales" = "#E31A1C",
+            "Oceanospirillales" = "#FDBF6F",
+            "Rhizobiales" = "#FF7F00",
+            "Rhodobacterales" = "#CAB2D6",
+            "Rickettsiales" = "#6A3D9A",
+            "SAR11 clade" = "#FFFF99",
+            "Thaumarchaeota" ="#B15928",
+            "Nitrosopumilus" = "brown",
+            "Pseudomonadales" = "orchid1",
+            "Alphaproteobacteria" = "dodgerblue2",
+            "Caulobacterales" = "blue1", 
+            "Campylobacterales"  = "yellow3",
+            "Rhodocyclales"  =  "yellow4" ,
+            "Bacteroidales"    = "deeppink1",
+            "SAR92"    = "gold1" ,
+            "Methanosarcinales"  = "steelblue4",
+            "Sphingomonadales"   = "maroon", 
+            "Vibrionales"     = "skyblue2",
+            "Betaproteobacteria" = "green1",
+            "Enterobacteriales" = "darkturquoise",
+            "Pasteurellales"  = "#cc0000",
+            "Other" =  "gray70" 
+            )
+
+
 ```
 
 ```{r}
@@ -103,8 +134,22 @@ pathway_key <- read_tsv("../data/new_pathways.tsv") %>%
   rename(KEGG_Pathway = "identifier") %>%
   rbind(c(KEGG_Pathway = "-", pathway = "No entry"))
 
-mesocosm_variables <- read_tsv("../data/Mesocosm_Variables.tsv")
+mesocosm_variables <- read_tsv("../data/Mesocosm_Variables.tsv") # Add the µ here
 mesocosm_variables[8, "DOC"] <- 373.9 # Replacing outlier with average value of replicates
+
+mu <- read_tsv("../data/mu.tsv") %>%
+  select(-Sampling) %>%
+  mutate(Day_of_experiment =case_when( #Corrrecting for wrong day-values
+                      Day_of_experiment == 5 ~ 3,
+                      Day_of_experiment == 8 ~ 6,
+                      Day_of_experiment == 12 ~ 10,
+                      Day_of_experiment == 15 ~ 13,
+                      Day_of_experiment == 19 ~ 17,
+                      Day_of_experiment == 22 ~ 20,
+                      Day_of_experiment == 26 ~ 24,
+                      Day_of_experiment == 29 ~ 27
+                     
+  ))
 
 #Reading in contrast file from edgeR-output
 contrasts <- read_tsv("../results/edgeR_contrasts.tsv")
@@ -168,7 +213,7 @@ Folding_sorting_and_degradation <-
 Replication_and_repair <- 
   c("03030","03410","03420","03430","03440","03450","03460")
 
- #This category is removed from the categorie-vector due to no hits at all among the DE-genes
+ #This category is removed from the category-vector due to no hits at all among the DE-genes
 Information_processing_in_viruses <-
    c("03230","03240","03250","03260","03262","03261","03263","03264","03265","03266","03268","03267")
  
@@ -227,8 +272,18 @@ orf_KEGG2_key <- eggnogs %>%
 #| label: IntroVars
 #| warning: false
 
-mesocosm_variables %>%
-  pivot_longer(cols = 4:9, names_to = "variable", values_to = "value") %>%
+letters <- c("a","b","c","d","ne")
+variable <- c("Chlorophyll~a~(µg~dm^{-3})",
+                                      "Dissolved~organic~carbon~(µmol~dm^{-3})",
+                                      "Prokaryotic~abundance~(cells~mL^{-1})~x~10^9",
+                                      "Prokaryotic~production~(cells~mL^{-1}~d^{-1})~x~10^9",
+                                      "Prokaryotic~growth~rate~(µ)")
+
+df <- data.frame(letters, variable)
+
+ mesocosm_variables %>%
+  inner_join(mu, by = c("Day_of_experiment","Treatment", "Replicate")) %>%
+  pivot_longer(cols = 4:10, names_to = "variable", values_to = "value") %>%
   group_by(Day_of_experiment, Treatment, variable) %>%
   summarise(mean_value = mean(value), stdev_value = sd(value)) %>%
   ungroup() %>% 
@@ -237,11 +292,12 @@ mesocosm_variables %>%
   mutate(mean_value = ifelse(grepl("PA|PG", variable), mean_value/10^9, paste0(mean_value)) %>% as.numeric()) %>%
   mutate(stdev_value = ifelse(grepl("PA|PG", variable), stdev_value/10^9, paste0(stdev_value)) %>% as.numeric()) %>%
   mutate(variable = factor(variable,
-                           levels = c("Chlorophyll_a","DOC","PA","PG"),
+                           levels = c("Chlorophyll_a","DOC","PA","PG", "mu"),
                            labels = c("Chlorophyll~a~(µg~dm^{-3})",
                                       "Dissolved~organic~carbon~(µmol~dm^{-3})",
                                       "Prokaryotic~abundance~(cells~mL^{-1})~x~10^9",
-                                      "Prokaryotic~production~(cells~mL^{-1}~d^{-1})~x~10^9"
+                                      "Prokaryotic~production~(cells~mL^{-1}~d^{-1})~x~10^9",
+                                      "Prokaryotic~growth~rate~(µ)"
                                       )
                            )) %>%
   ggplot(mapping = aes(x = Day_of_experiment, y= mean_value, colour = Treatment)) +
@@ -252,6 +308,7 @@ mesocosm_variables %>%
              strip.position = "left",
              labeller = label_parsed
              ) +
+  geom_text(data = df, aes(x = 3, y = Inf, label = letters, size = 7, fontface = "bold"), colour = "black", show.legend = FALSE) +
   theme_minimal() +
   scale_x_continuous(labels = c(3,6,10,13,17,20,24,27),
                      breaks= c(3,6,10,13,17,20,24,27)) +
@@ -263,14 +320,16 @@ mesocosm_variables %>%
         axis.title = element_text(size = 7, colour = "black", face = "bold"),
         axis.line = element_line(size = 0.3, colour = "black", linetype=1),
         strip.placement = "outside",
-        panel.grid = element_blank()
+        panel.grid = element_blank(),
+        legend.position = c(0.85,0.2)
         ) +
   xlab("Day of experiment") +
   ylab("") +
-  scale_colour_manual('Treatment', values = TREAT_COLOURS)
+  scale_colour_manual('Treatment', values = TREAT_COLOURS) 
 
-ggsave("../results/mesocosmVariables.png")
-ggsave("../results/mesocosmVariables.pdf")
+
+ggsave("../results/mesocosmVariables.png", height = 12, width = 18, units = "cm", bg = "white")
+ggsave("../results/mesocosmVariables.pdf", height = 12, width = 18, units = "cm")
 ```
 
 ## Plot PCA and taxonomy
@@ -391,12 +450,14 @@ p2
 #| warning: false
 #Patchworking the two figure together into a panel
 
-p1 + p2 + plot_annotation() & theme(legend.position = "bottom", 
+p1 + p2 + plot_annotation(tag_levels = 'a') & theme(legend.position = "bottom", 
                                                     legend.key.size = unit(0.2, 'cm'), 
                                                     legend.text = element_text(size=7), 
-                                                    legend.title = element_text(size=7))
+                                                    legend.title = element_text(size=7),
+                                                    plot.tag = element_text(face = 'bold', size = 8))
 
-ggsave("../results/EGGsAndTax_eukulele.png", width = 25, units = "cm")
+ggsave("../results/EGGsAndTax_eukulele.png", width = 18, units = "cm")
+ggsave("../results/EGGsAndTax_eukulele.pdf", width = 18, units = "cm")
 ```
 
 ## KEGG pathways and modules
@@ -635,17 +696,7 @@ bbmap_p %>%
   theme(axis.text.x = element_text(size = 7), 
         panel.background = element_blank(),
         axis.text.y = element_text(size = 7)) +
-  scale_fill_manual('Taxonomy', values = c("Oceanospirillales" = "#FB9A99",
-                                           "Alteromonadales" = "#A6CEE3",
-                                           "Burkholderiales" = "#1F78B4",
-                                           "Gammaproteobacteria" = "#33A02C",
-                                           "SAR11 clade" = "#CAB2D6",
-                                           "Flavobacteriales" = "#B2DF8A",
-                                           "Thaumarchaeota" = "#6A3D9A",
-                                           "Rhodobacterales" = "#FF7F00",
-                                           "Pseudomonadales" = "#FDBF6F",
-                                           "Nitrosopumilus" = "#B15928",
-                                           "Other" = "#808080")) +
+scale_fill_manual("Taxonomy", values = ALLTAX) +
   ylab(bquote('transcripts per million (tpm x'~10^3~')')) +
   xlab("") +
   coord_flip() +
@@ -703,17 +754,7 @@ bbmap_p %>%
   theme(axis.text.x = element_text(size = 7), 
         panel.background = element_blank(),
         axis.text.y = element_text(size = 7)) +
-  scale_fill_manual('Taxonomy', values = c("Oceanospirillales" = "#FB9A99",
-                                           "Alteromonadales" = "#A6CEE3",
-                                           "Burkholderiales" = "#1F78B4",
-                                           "Gammaproteobacteria" = "#33A02C",
-                                           "SAR11 clade" = "#CAB2D6",
-                                           "Flavobacteriales" = "#B2DF8A",
-                                           "Thaumarchaeota" = "#6A3D9A",
-                                           "Rhodobacterales" = "#FF7F00",
-                                           "Pseudomonadales" = "#FDBF6F",
-                                           "Nitrosopumilus" = "#B15928",
-                                           "Other" = "#808080"), guide = "none") +
+  scale_fill_manual("Taxonomy", values = ALLTAX, guide = "none") +
  ylab(bquote('transcripts per million (tpm x'~10^3~')')) +
   xlab("") +
   coord_flip() +
@@ -769,17 +810,7 @@ bbmap_p %>%
   theme(axis.text.x = element_text(size = 7), 
         panel.background = element_blank(),
         axis.text.y = element_text(size = 7)) +
-  scale_fill_manual('Taxonomy', values = c("Oceanospirillales" = "#FB9A99",
-                                           "Alteromonadales" = "#A6CEE3",
-                                           "Burkholderiales" = "#1F78B4",
-                                           "Gammaproteobacteria" = "#33A02C",
-                                           "SAR11 clade" = "#CAB2D6",
-                                           "Flavobacteriales" = "#B2DF8A",
-                                           "Thaumarchaeota" = "#6A3D9A",
-                                           "Rhodobacterales" = "#FF7F00",
-                                           "Pseudomonadales" = "#FDBF6F",
-                                           "Nitrosopumilus" = "#B15928",
-                                           "Other" = "#808080"),guide = "none") +
+   scale_fill_manual("Taxonomy", values = ALLTAX, guide = "none") +
  ylab(bquote('transcripts per million (tpm x'~10^3~')')) +
   xlab("") +
   coord_flip() +
@@ -836,17 +867,7 @@ bbmap_p %>%
   theme(axis.text.x = element_text(size = 7), 
         panel.background = element_blank(),
         axis.text.y = element_text(size = 7)) +
-  scale_fill_manual('Taxonomy', values = c("Oceanospirillales" = "#FB9A99",
-                                           "Alteromonadales" = "#A6CEE3",
-                                           "Burkholderiales" = "#1F78B4",
-                                           "Gammaproteobacteria" = "#33A02C",
-                                           "SAR11 clade" = "#CAB2D6",
-                                           "Flavobacteriales" = "#B2DF8A",
-                                           "Thaumarchaeota" = "#6A3D9A",
-                                           "Rhodobacterales" = "#FF7F00",
-                                           "Pseudomonadales" = "#FDBF6F",
-                                           "Nitrosopumilus" = "#B15928",
-                                           "Other" = "#808080"), guide = "none") +
+    scale_fill_manual("Taxonomy", values = ALLTAX, guide = "none") +
  ylab(bquote('transcripts per million (tpm x'~10^3~')')) +
   xlab("") +
   coord_flip() +
@@ -932,21 +953,22 @@ ggsave("../results/pathway_level2.png")
   
   topOrd <- sort(unique(c(NvsCDown,NvsCUp,TvsCTUp,TNvsTTax)))
   
-  #Creating the colour legend
-  Tax_colour <- c("Alteromonadales" = "#FDBF6F",
+  
+  #Creating the colour legend for the supplementary, same as the ALLTAX, but with addition of hydrogenophilales
+  Tax_colour <- c("Alteromonadales" = "#A6CEE3",
                   "Burkholderiales" = "#1F78B4",
-                  "Campylobacterales" = "#FF7F00",
-                  "Flavobacteriales" = "#E31A1C",
+                  "Campylobacterales" = "yellow3",
+                  "Flavobacteriales" = "#33A02C",
                   "Hydrogenophilales" = "magenta",
-                  "Nitrosomonadales" = "#FFFF99",
-                  "Nitrosopumilus" = "steelblue4",
-                  "Oceanospirillales" = "#6A3D9A",
-                  "Rhodobacterales" = "#B15928",
-                  "Rickettsiales" = "#A6CEE3",
-                  "SAR11 clade" = "#33A02C",
-                  "SAR92" = "#B2DF8A",
-                  "Thaumarchaeota" = "#FB9A99" ,
-                  "Other" = "#808080"
+                  "Nitrosomonadales" = "#39FF14",
+                  "Nitrosopumilus" = "brown",
+                  "Oceanospirillales" = "#FDBF6F",
+                  "Rhodobacterales" = "#CAB2D6",
+                  "Rickettsiales" = "#6A3D9A",
+                  "SAR11 clade" = "#FFFF99",
+                  "SAR92" = "gold1",
+                  "Thaumarchaeota" = "#B15928" ,
+                  "Other" = "gray70"
                   )
 
 
@@ -1367,10 +1389,10 @@ ggsave("../results/InteractAndArch.png")
 ```
 
 # Looking at interaction effect eggNOGs
+
 ```{r}
 
 ```
-
 
 # Tables
 
@@ -1798,9 +1820,13 @@ p4 <- bbmap_p %>%
 ```
 
 ```{r}
- p_combined <- p1 + p2 + p3 + p4
+ p_combined <- p2 + p1 + p3 + p4 + plot_annotation(tag_levels = 'a') & theme(legend.key.size = unit(0.2, 'cm'), 
+                                                    legend.text = element_text(size=7), 
+                                                    legend.title = element_text(size=7),
+                                                    plot.tag = element_text(face = 'bold', size = 8))
 
-ggsave("../results/nested_taxonomies.png", plot = p_combined, height = 20, width = 35, units = "cm")
+ggsave("../results/nested_taxonomies.png", plot = p_combined, height = 20, width = 24, units = "cm")
+ggsave("../results/nested_taxonomies.pdf", plot = p_combined, height = 20, width = 24, units = "cm")
 ```
 
 ## Table contrasts
@@ -1912,7 +1938,7 @@ mets <- c("M00528","M00529","M00804","M00174")
 
 # So the overlaps are as such:
 
-  #Hao is in both Nirrification and complete nitrification.
+  #Hao is in both Nitrification and complete nitrification.
   # the NarG is overlapping in Denitrification and complete nitrification
   # amoA overlap in complete nitrification and nitrification
   # Methane oxidation overlap in pmoA-amoA (exclude this one based on tree)
@@ -1949,6 +1975,15 @@ ArchEnMet <- bbmap_p %>%
 write_tsv(ArchEnMet, "../results/ArchEnMet.tsv")
 ```
 
+## Do not keep
+
+```{r}
+#PLotta amoA och amtB utanb kontraster för Nitrosopumilus
+
+## K10944  - amoA
+## 
+```
+
 ## Looking into the energy metabolism in Nitrosopumilus by the interaction effect in the C-N treatments
 
 This is interesting, as one gene (K00261) glutamate dehydrogenase is involved in ammonia assimilation\
@@ -1972,4 +2007,343 @@ hmm <- bbmap_p %>%
   mutate(KEGG_level_2 = ifelse(KEGG_ko == "ko:K03320", paste0("Ammonium transporter"),paste0(KEGG_level_2))) %>%
   filter(order_coa == "Nitrosopumilus" & KEGG_level_2 == "Energy metabolism") %>%
   inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog, KEGG_ko,Preferred_name, narr_og_desc))
+```
+
+```{r}
+TNvsT <- contrasts %>%
+  filter(contrast == "TNvsT") %>%
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog, KEGG_ko, Preferred_name, best_og_desc), by = "seed_eggNOG_ortholog") %>%
+  filter(fdr <= 0.05 & type == "Up") %>%
+  select(logCPM, best_og_desc, Preferred_name,seed_eggNOG_ortholog) %>%
+  pull(seed_eggNOG_ortholog)
+
+
+```
+
+```{r}
+
+#Taxonomy of eggNOGs
+TaxEgg <- eggnogs %>%
+  distinct(orf, seed_eggNOG_ortholog) %>%
+  inner_join(taxonomy, by = "orf") %>%
+  mutate(Tax_level = coalesce(order, class, phylum, domain)) %>%
+  mutate(Tax_level = ifelse(Tax_level == "Thaumarchaeota" & genus == "Nitrosopumilus", paste0(genus), paste0(Tax_level))) 
+```
+
+## C-contrast
+```{r}
+NvsC_down <- contrasts %>%
+  filter(contrast == "NvsC") %>%
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog, KEGG_ko, Preferred_name, best_og_desc), by = "seed_eggNOG_ortholog") %>%
+  filter(fdr <= 0.05 & type == "Down") %>%
+  select(logCPM, best_og_desc, Preferred_name,seed_eggNOG_ortholog) %>%
+  pull(seed_eggNOG_ortholog)
+
+#Selecting the top30 eggnogs for ordering purpose, this is not possible in data chunk below so I do it this way
+top30C <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  semi_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  filter(treatment %in% c("C")) %>% #selecting relevant treatments for the plot
+  group_by(orf, treatment,timepoint) %>% # Summarising mean tpm per orf per treatment and timepoint
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%       
+  inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog, KEGG_ko), by = "orf") %>%
+  group_by(seed_eggNOG_ortholog, treatment,timepoint) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%   
+  filter(seed_eggNOG_ortholog %in% NvsC_down) %>%
+  arrange(desc(tpm)) %>%
+  slice(1:30) %>% # Selecting 30 most abundant eggnogs
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog,best_og_desc, Preferred_name, KEGG_ko)) %>%
+  pull(seed_eggNOG_ortholog)
+
+C_eggnogs <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  semi_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  filter(treatment %in% c("C")) %>% #selecting relevant treatments for the plot
+  group_by(orf, treatment,timepoint) %>% # Summarising mean tpm per orf per treatment and timepoint
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%       
+  inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog, KEGG_ko), by = "orf") %>%
+  inner_join(TaxEgg, by = c("orf", "seed_eggNOG_ortholog")) %>% 
+  group_by(seed_eggNOG_ortholog, treatment,timepoint, Tax_level) %>% #summarising tpm per eggnog and taxonomy
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%   
+  filter(seed_eggNOG_ortholog %in% top30C) %>%
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog,best_og_desc, Preferred_name, KEGG_ko))
+
+#Calculatin most abundant tax_levels and keeping only the most abundant
+top10C_taxa <- C_eggnogs %>%
+  group_by(Tax_level) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:10) %>%
+  pull(Tax_level)
+
+C_eggnogs %>%
+    mutate(Tax_level = ifelse(Tax_level %in% top10C_taxa, paste0(Tax_level), paste0("Other"))) %>%
+   mutate(Preferred_name = ifelse(Preferred_name == "-", paste0(KEGG_ko), paste0(Preferred_name))) %>%
+   mutate(Preferred_name = ifelse(Preferred_name == "-" & KEGG_ko == "-", paste0(best_og_desc), paste0(Preferred_name))) %>% 
+    mutate(Preferred_name = ifelse(Preferred_name == "-" & KEGG_ko == "-" & best_og_desc == "-", paste0(seed_eggNOG_ortholog), paste0(Preferred_name))) %>%
+  mutate(Preferred_name = ifelse(Preferred_name == "-" & KEGG_ko == "ko:K03320", paste0("amt"), paste0(Preferred_name))) %>% 
+  mutate(Preferred_name = fct_reorder(Preferred_name, .x = tpm, .fun = sum, .desc = FALSE)) %>%
+  ggplot(mapping = aes(x = Preferred_name, y = tpm, fill = fct_relevel(Tax_level, "Other", after = Inf))) +
+  geom_col() +
+  theme_classic() +
+  theme(axis.text = element_text(size = 7),
+        axis.title = element_text(size = 7),
+        legend.title = element_text(size = 7, face = "bold"),
+        legend.text = element_text(size = 7)) +
+  coord_flip() +
+   scale_fill_manual('Taxonomy', values = ALLTAX)
+
+p1 <- ggplot2::last_plot()
+```
+
+## N-contrast
+```{r}
+NvsC_up <- contrasts %>%
+  filter(contrast == "NvsC") %>%
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog, KEGG_ko, Preferred_name, best_og_desc), by = "seed_eggNOG_ortholog") %>%
+  filter(fdr <= 0.05 & type == "Up") %>%
+  select(logCPM, best_og_desc, Preferred_name,seed_eggNOG_ortholog) %>%
+  pull(seed_eggNOG_ortholog)
+
+#Selecting the top30 eggnogs for ordering purpose, this is not possible in data chunk below so I do it this way
+top30N <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  semi_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  filter(treatment %in% c("N")) %>% #selecting relevant treatments for the plot
+  group_by(orf, treatment,timepoint) %>% # Summarising mean tpm per orf per treatment and timepoint
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%       
+  inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog, KEGG_ko), by = "orf") %>%
+  group_by(seed_eggNOG_ortholog, treatment,timepoint) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%   
+  filter(seed_eggNOG_ortholog %in% NvsC_up) %>%
+  arrange(desc(tpm)) %>%
+  slice(1:30) %>% # Selecting 30 most abundant eggnogs
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog,best_og_desc, Preferred_name, KEGG_ko)) %>%
+  pull(seed_eggNOG_ortholog)
+
+N_eggnogs <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  semi_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  filter(treatment %in% c("N")) %>% #selecting relevant treatments for the plot
+  group_by(orf, treatment,timepoint) %>% # Summarising mean tpm per orf per treatment and timepoint
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%       
+  inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog, KEGG_ko), by = "orf") %>%
+  inner_join(TaxEgg, by = c("orf", "seed_eggNOG_ortholog")) %>% 
+  group_by(seed_eggNOG_ortholog, treatment,timepoint, Tax_level) %>% #summarising tpm per eggnog and taxonomy
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%   
+  filter(seed_eggNOG_ortholog %in% top30N) %>%
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog,best_og_desc, Preferred_name, KEGG_ko))
+
+#Calculating most abundant tax_levels and keeping only the most abundant
+top10N_taxa <- N_eggnogs %>%
+  group_by(Tax_level) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:10) %>%
+  pull(Tax_level)
+
+ N_eggnogs %>%
+    mutate(Tax_level = ifelse(Tax_level %in% top10N_taxa, paste0(Tax_level), paste0("Other"))) %>%
+  mutate(Preferred_name = case_when(Preferred_name == "-" & KEGG_ko == "ko:K10944" ~ paste0("amoA"),
+                                    Preferred_name == "-" & KEGG_ko == "ko:K10945" ~ paste0("amoB"),
+                                    Preferred_name == "-" & best_og_desc == "Part of the tripartite ATP-independent periplasmic (TRAP) transport system" ~ paste0("TRAP-transport"),
+                                    TRUE ~ Preferred_name
+         )) %>%
+   mutate(Preferred_name = ifelse(Preferred_name == "-", paste0(KEGG_ko), paste0(Preferred_name))) %>%
+   mutate(Preferred_name = ifelse(Preferred_name == "-" & KEGG_ko == "-", paste0(best_og_desc), paste0(Preferred_name))) %>% 
+    mutate(Preferred_name = ifelse(Preferred_name == "-" & KEGG_ko == "-" & best_og_desc == "-", paste0(seed_eggNOG_ortholog), paste0(Preferred_name))) %>% 
+  mutate(Preferred_name = fct_reorder(Preferred_name, .x = tpm, .fun = sum, .desc = FALSE)) %>% 
+  ggplot(mapping = aes(x = Preferred_name, y = tpm, fill = fct_relevel(Tax_level, "Other", after = Inf))) +
+  geom_col() +
+  theme_classic() +
+  theme(axis.text = element_text(size = 7),
+        axis.title = element_text(size = 7),
+        legend.title = element_text(size = 7, face = "bold"),
+        legend.text = element_text(size = 7)) +
+  coord_flip() +
+  scale_fill_manual('Taxonomy', values = ALLTAX)
+
+p2 <- ggplot2::last_plot()
+```
+
+##T
+```{r}
+TvsC <- contrasts %>%
+  filter(contrast == "TvsC") %>%
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog, KEGG_ko, Preferred_name, best_og_desc), by = "seed_eggNOG_ortholog") %>%
+  filter(fdr <= 0.05 & type == "Up") %>%
+  select(logCPM, best_og_desc, Preferred_name,seed_eggNOG_ortholog) %>%
+  pull(seed_eggNOG_ortholog)
+
+#Selecting the top30 eggnogs for ordering purpose, this is not possible in data chunk below so I do it this way
+top30T <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  semi_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  filter(treatment %in% c("T")) %>% #selecting relevant treatments for the plot
+  group_by(orf, treatment,timepoint) %>% # Summarising mean tpm per orf per treatment and timepoint
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%       
+  inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog, KEGG_ko), by = "orf") %>%
+  group_by(seed_eggNOG_ortholog, treatment,timepoint) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%   
+  filter(seed_eggNOG_ortholog %in% TvsC) %>%
+  arrange(desc(tpm)) %>%
+  slice(1:30) %>% # Selecting 30 most abundant eggnogs
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog,best_og_desc, Preferred_name, KEGG_ko)) %>%
+  pull(seed_eggNOG_ortholog)
+
+T_eggnogs <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  semi_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  filter(treatment %in% c("T")) %>% #selecting relevant treatments for the plot
+  group_by(orf, treatment,timepoint) %>% # Summarising mean tpm per orf per treatment and timepoint
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%       
+  inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog, KEGG_ko), by = "orf") %>%
+  inner_join(TaxEgg, by = c("orf", "seed_eggNOG_ortholog")) %>% 
+  group_by(seed_eggNOG_ortholog, treatment,timepoint, Tax_level) %>% #summarising tpm per eggnog and taxonomy
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%   
+  filter(seed_eggNOG_ortholog %in% top30T) %>%
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog,best_og_desc, Preferred_name, KEGG_ko))
+
+#Calculating most abundant tax_levels and keeping only the most abundant
+top10T_taxa <- T_eggnogs %>%
+  group_by(Tax_level) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:10) %>%
+  pull(Tax_level)
+
+ T_eggnogs %>%
+    mutate(Tax_level = ifelse(Tax_level %in% top10T_taxa, paste0(Tax_level), paste0("Other"))) %>%
+  mutate(Preferred_name = case_when(Preferred_name == "-" & KEGG_ko == "ko:K10944" ~ paste0("amoA"),
+                                    Preferred_name == "-" & KEGG_ko == "ko:K10945" ~ paste0("amoB"),
+                                    Preferred_name == "-" & best_og_desc == "Part of the tripartite ATP-independent periplasmic (TRAP) transport system" ~ paste0("TRAP-transport"),
+                                    TRUE ~ Preferred_name
+         )) %>%
+    mutate(Preferred_name = ifelse(Preferred_name == "-", paste0(KEGG_ko), paste0(Preferred_name))) %>%
+   mutate(Preferred_name = ifelse(Preferred_name == "-" & KEGG_ko == "-", paste0(best_og_desc), paste0(Preferred_name))) %>% 
+    mutate(Preferred_name = ifelse(Preferred_name == "-" & KEGG_ko == "-" & best_og_desc == "-", paste0(seed_eggNOG_ortholog), paste0(Preferred_name))) %>%
+  mutate(Preferred_name = fct_reorder(Preferred_name, .x = tpm, .fun = sum, .desc = FALSE)) %>%
+  ggplot(mapping = aes(x = Preferred_name, y = tpm, fill = fct_relevel(Tax_level, "Other", after = Inf))) +
+  geom_col() +
+  theme_classic() +
+  theme(axis.text = element_text(size = 7),
+        axis.title = element_text(size = 7),
+        legend.title = element_text(size = 7, face = "bold"),
+        legend.text = element_text(size = 7)) +
+  coord_flip() +
+   scale_fill_manual("Taxonomy", values = ALLTAX)
+
+p3 <- ggplot2::last_plot()
+```
+
+
+## TN
+```{r}
+TNvsT <- contrasts %>%
+  filter(contrast == "TNvsT") %>%
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog, KEGG_ko, Preferred_name, best_og_desc), by = "seed_eggNOG_ortholog") %>%
+  filter(fdr <= 0.05 & type == "Up") %>%
+  select(logCPM, best_og_desc, Preferred_name,seed_eggNOG_ortholog) %>%
+  pull(seed_eggNOG_ortholog)
+
+#Selecting the top30 eggnogs for ordering purpose, this is not possible in data chunk below so I do it this way
+top30TN <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  semi_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  filter(treatment %in% c("TN")) %>% #selecting relevant treatments for the plot
+  group_by(orf, treatment,timepoint) %>% # Summarising mean tpm per orf per treatment and timepoint
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%       
+  inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog, KEGG_ko), by = "orf") %>%
+  group_by(seed_eggNOG_ortholog, treatment,timepoint) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%   
+  filter(seed_eggNOG_ortholog %in% TNvsT) %>%
+  arrange(desc(tpm)) %>%
+  slice(1:30) %>% # Selecting 30 most abundant eggnogs
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog,best_og_desc, Preferred_name, KEGG_ko)) %>%
+  pull(seed_eggNOG_ortholog)
+
+TN_eggnogs <- bbmap_p %>%
+  inner_join(sample_ID, by = "sample") %>%
+  semi_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  filter(treatment %in% c("TN")) %>% #selecting relevant treatments for the plot
+  group_by(orf, treatment,timepoint) %>% # Summarising mean tpm per orf per treatment and timepoint
+  summarise(tpm = mean(tpm)) %>%
+  ungroup() %>%       
+  inner_join(eggnogs %>% distinct(orf, seed_eggNOG_ortholog, KEGG_ko), by = "orf") %>%
+  inner_join(TaxEgg, by = c("orf", "seed_eggNOG_ortholog")) %>% 
+  group_by(seed_eggNOG_ortholog, treatment,timepoint, Tax_level) %>% #summarising tpm per eggnog and taxonomy
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%   
+  filter(seed_eggNOG_ortholog %in% top30TN) %>%
+  inner_join(eggnogs %>% distinct(seed_eggNOG_ortholog,best_og_desc, Preferred_name, KEGG_ko))
+
+#Calculating most abundant tax_levels and keeping only the most abundant
+top10TN_taxa <- TN_eggnogs %>%
+  group_by(Tax_level) %>%
+  summarise(tpm = sum(tpm)) %>%
+  ungroup() %>%
+  arrange(desc(tpm)) %>%
+  slice(1:10) %>%
+  pull(Tax_level)
+
+ TN_eggnogs %>%
+    mutate(Tax_level = ifelse(Tax_level %in% top10TN_taxa, paste0(Tax_level), paste0("Other"))) %>%
+  mutate(Preferred_name = case_when(Preferred_name == "-" & KEGG_ko == "ko:K10944" ~ paste0("amoA"),
+                                    Preferred_name == "-" & KEGG_ko == "ko:K10945" ~ paste0("amoB"),
+                                    Preferred_name == "-" & best_og_desc == "Part of the tripartite ATP-independent periplasmic (TRAP) transport system" ~ paste0("TRAP-transport"),
+                                    TRUE ~ Preferred_name
+         )) %>%
+   mutate(Preferred_name = ifelse(Preferred_name == "-", paste0(KEGG_ko), paste0(Preferred_name))) %>%
+   mutate(Preferred_name = ifelse(Preferred_name == "-" & KEGG_ko == "-", paste0(best_og_desc), paste0(Preferred_name))) %>% 
+    mutate(Preferred_name = ifelse(Preferred_name == "-" & KEGG_ko == "-" & best_og_desc == "-", paste0(seed_eggNOG_ortholog), paste0(Preferred_name))) %>%
+  mutate(Preferred_name = fct_reorder(Preferred_name, .x = tpm, .fun = sum, .desc = FALSE)) %>%
+ ggplot(mapping = aes(x = Preferred_name, y = tpm, fill = fct_relevel(Tax_level, "Other", after = Inf))) +
+  geom_col() +
+  theme_classic() +
+  theme(axis.text = element_text(size = 7),
+        axis.title = element_text(size = 7),
+        legend.title = element_text(size = 7, face = "bold"),
+        legend.text = element_text(size = 7)) +
+  coord_flip() +
+   scale_fill_manual("Taxonomy", values = ALLTAX)
+ 
+ p4 <- ggplot2::last_plot()
+```
+## Patchworking
+```{r}
+allTax <- unique(as.vector(c(top10C_taxa, top10N_taxa, top10T_taxa, top10TN_taxa)))
+
+p1 + p2 + p3 + p4 + plot_annotation(tag_levels = list(c('C', 'N', "T","TN"))) #+ plot_layout(guides = "collect")
+
+ggsave("../results/top30_eggnogs.pdf")
+```
+
+
+
+```{r}
+# Preparing the plotting here
+genes_of_interest <- c("")
+
+TNvsT %>%
+  filter(Preferred_name %in% genes_of_interest) %>%
+  ggplot(mapping = aes(x = Preferred_name, y = logCPM)) +
+  geom_col() +
+  facet_wrap(~ contrasts)
 ```
