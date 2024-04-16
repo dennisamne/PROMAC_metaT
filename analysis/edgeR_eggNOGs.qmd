@@ -1,0 +1,205 @@
+---
+title: "edgeR_eggNOGs"
+author: "Dennis Amnebrink"
+affiliation-title: "Linnaeus University"
+title-block-banner: true
+date: now
+editor: visual
+toc: true
+prefer-html: true
+number-sections: true
+format:
+  html:
+     code-fold: true
+     self-contained: true
+---
+
+```{r}
+#| label: constants
+SIGNIFICANCE = 0.05
+DIFF_TRESHOLD = 0
+MIN_COUNT = 15
+MIN_SAMPLE = 2
+```
+
+```{r}
+#| label: colours
+TREAT_COLS = c("blue","green3","red","yellow4")
+```
+
+```{r}
+#| label: libraries
+#| warning: false
+library(data.table)
+library(edgeR)
+library(tidyverse)
+library(forcats)
+library(ggplot2)
+library(kableExtra)
+library(UpSetR)
+library(vegan)
+library(plotly)
+library(patchwork)
+```
+
+```{r}
+#| label: read_files
+#| warning: false
+#| cache: true
+
+#Count file for all orfs, tpm is calculated per sample
+eggnogs <- read_tsv("../data/eggnog_annotations.tsv.gz")
+
+#Reading in taxonomic annotation of reads
+taxonomy <- read_tsv("../data/eukulele_phylodb.tsv") %>%
+  select(-species) %>%
+  rename(species = "genus", genus = "family", family = "order", order = "class", class = "phylum", phylum = "kingdom")  %>%
+  mutate_all(function(x) ifelse(str_detect(x, '_X'), NA, x)) %>% #Removing _X-annotations
+  mutate_all(function(x) ifelse(str_detect(x, 'environmental'), NA, x)) %>% # Removing environmental - annotations this is considered the same as NA
+  mutate_all(function(x) ifelse(str_detect(x, 'Misc'), NA, x)) %>%
+  mutate_all(function(x) ifelse(str_detect(x, 'unclassified'), NA, x))
+  
+  
+#Count file for all orfs, tpm is calculated per sample
+bbmap <- fread("../data/bbmap_counts.tsv.gz", sep = "\t") %>%
+              filter(count > 0)  %>%                               # removing 0 counts to reduce size of table
+              mutate(Geneid = str_replace(Geneid, "[0-9]*_",""),   # Joining in chr and geneid to match format of eggnog naming.
+                     orf = paste(Chr,Geneid, sep = "_"),
+                     sample = str_extract(sample, "P[0-9]*_[0-9]*")) %>% # Removing extra numbers in sample to match sample_ID format
+              dplyr::select(-Geneid,-Chr) %>%
+              dplyr::select(orf,Start,End,Strand,Length,sample,count,tpm) 
+
+
+
+#File to connect NGI ID with our own classification ID, add the µ-values to this file for testing later, or do that in a sep file?
+sample_ID <- read_tsv("../data/J.Pinhassi_21_02_sample_info.txt") %>%
+  dplyr::select(1:2) %>%
+  dplyr::rename(sample = 1, sample_name = 2) %>%
+  mutate(sample_name = str_replace(sample_name, "[0-9]*:","")) %>%
+  separate(sample_name, c("treatment","timepoint"), sep = ",") %>%
+  mutate(treatment = gsub("NT","TN", treatment)) %>%
+  mutate(sample_name = paste(timepoint, treatment, sep = "_")) %>%
+  separate(treatment, c("treatment","replicate"), sep = -1) %>%
+  mutate(tre_rep = gsub("_","", sample_name)) %>%
+  mutate(tre_rep = toupper(tre_rep)) %>%
+  mutate(day = case_when( timepoint == "t3" ~ 10,
+                          TRUE ~ 17
+                          )
+         ) %>%
+  as.data.table()
+
+```
+
+```{r}
+#| cache: true
+#| warning: false
+#Removing non-prokreads as well as recalculating tpm over prok frac.
+bbmap_p <- bbmap %>%
+  semi_join(taxonomy %>% filter(domain %in% c("Bacteria","Archaea")), by = "orf") %>%
+  dplyr::select(-tpm) %>%
+   group_by(sample) %>%
+            mutate(t = count/Length) %>%
+            mutate(tpm = t/sum(t)*1e6) %>%
+   ungroup()
+```
+
+## EdgeR test eggNOGs
+
+The separation of the TN treatment in the PCA (@fig-PCA) incited the question of whether this separation could partly be explained by an interaction effect between temperature and nutrients. To this end a permanova was performed following the 2x2 factorial design of temperature and nutrients. The test revealed significant effects of both temperature and nutrients alone, and the significant interaction effect, further corroborating the cluster positions seen in the PCA. To investigate the effect of nutrient addition on microbial community gene expression at different temperature regimes, the edgeR analysis included the following contrasts:\
+$N - C$\
+$TN - T$\
+$(TN - T) - (N - C)$\
+The last being the interaction effect between temperature and nutrients.\
+Legend of letters: Cold_control (**C**), Cold_nutrient (**N**), Warm_control (**T**) , Warm_nutrient (**TN**).
+
+```{r edgeR}
+#| label: edgeR
+#| warning: false
+#| cache: true
+design <- model.matrix(~ 0 + factor(c(1,1,1,2,2,2,3,3,3,4,4,4)))
+colnames(design) <- c("warm_control","cold_control","cold_nutrient","warm_nutrient")
+
+#Creating sample vector with library sizes to feed into normalization.
+libSizes <- bbmap_p %>%
+  group_by(orf) %>%
+  filter(sum(count) >= MIN_COUNT, n() >= MIN_SAMPLE) %>%
+  ungroup() %>%
+  semi_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  select(sample, orf, count) %>%
+  spread(sample, count, fill = 0) %>%
+  column_to_rownames("orf") %>%
+  colSums() %>%
+  as.vector()
+
+#Creating DGElist
+dgelist <- bbmap_p %>%
+  group_by(orf) %>%
+  filter(sum(count) >= MIN_COUNT, n() >= MIN_SAMPLE) %>%
+  ungroup() %>%
+  semi_join(sample_ID %>% filter(day == '10'), by = 'sample') %>%
+  inner_join(eggnogs %>% select(orf, seed_eggNOG_ortholog), by = 'orf') %>%
+  group_by(seed_eggNOG_ortholog, sample) %>%
+  summarise(count = sum(count), .groups = 'drop') %>%
+  ungroup() %>%
+  pivot_wider(names_from = sample, values_from = count, values_fill = 0) %>%
+  as.data.frame() %>%
+  tibble::column_to_rownames('seed_eggNOG_ortholog') %>%
+  DGEList(lib.size = libSizes) %>% #This is where the libSizes need to be specified.
+  calcNormFactors() %>%
+  estimateDisp(design) %>%
+  glmQLFit(design, robust = TRUE)
+
+#Creating contrasts
+my.contrasts <- makeContrasts(cold_nutrientvscold_control=cold_nutrient-cold_control,
+                              warm_nutrientvswarm_control=warm_nutrient-warm_control,
+                              warm_controlvscold_control=warm_control-cold_control,
+                              interaction=(warm_nutrient-warm_control) - (cold_nutrient-cold_control),
+                              levels=design)
+
+
+#Creating contrasts
+
+qlf.NvsC <- glmQLFTest(dgelist, contrast=my.contrasts[,"cold_nutrientvscold_control"])
+
+qlf.TNvsT <- glmQLFTest(dgelist, contrast=my.contrasts[,"warm_nutrientvswarm_control"])
+
+qlf.TvsC <- glmQLFTest(dgelist, contrast=my.contrasts[,"warm_controlvscold_control"])
+
+qlf.interaction <- glmQLFTest(dgelist, contrast=my.contrasts[,"interaction"])
+
+#Combining tables and mutating fdr-values
+qlf.NvsC$table %>%
+  as.data.frame() %>%
+  rownames_to_column("seed_eggNOG_ortholog") %>%
+  mutate(contrast = "NvsC") %>%
+  bind_rows(
+    qlf.TNvsT$table %>%
+    as.data.frame() %>%
+    rownames_to_column("seed_eggNOG_ortholog") %>%
+    mutate(contrast = "TNvsT") %>%
+    as.data.frame()
+  ) %>%
+  bind_rows(
+    qlf.interaction$table %>%
+    as.data.frame() %>%
+    rownames_to_column("seed_eggNOG_ortholog") %>%
+    mutate(contrast = "interaction") %>%
+    as.data.frame()
+  ) %>%
+   bind_rows(
+    qlf.TvsC$table %>%
+    as.data.frame() %>%
+    rownames_to_column("seed_eggNOG_ortholog") %>%
+    mutate(contrast = "TvsC") %>%
+    as.data.frame()
+  ) %>%
+  mutate(fdr = p.adjust(PValue, method = "fdr")) %>%
+  mutate(type = 
+           case_when(
+             (fdr <= SIGNIFICANCE & logFC >= DIFF_TRESHOLD) ~ "Up",
+             (fdr <= SIGNIFICANCE & logFC <= -DIFF_TRESHOLD) ~ "Down",
+             TRUE ~"non-DE"
+           )) %>%
+  mutate(type = forcats::as_factor(type) %>% fct_relevel("Up","non-DE","Down")) %>% 
+  write_tsv("../results/edgeR_contrasts.tsv")
+```
